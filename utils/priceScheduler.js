@@ -6,6 +6,12 @@ let timers = [];
 let currentPrice = null;
 let stopped = false;
 
+// Store arguments for restart
+let storedSendMessageFn = null;
+let storedOnStopFn = null;
+let storedIsSoldFn = null;
+let storedOpts = null;
+
 /**
  * Compute equally-spaced send times between meal start and end.
  * @param {string} meal — 'breakfast', 'lunch', or 'dinner'
@@ -53,6 +59,12 @@ function computeSchedule(meal, numMessages) {
 function startScheduler(sendMessageFn, onStopFn, isSoldFn, opts) {
     stopped = false;
     currentPrice = config.DEFAULT_PRICE;
+
+    // Save for a potential restart
+    storedSendMessageFn = sendMessageFn;
+    storedOnStopFn = onStopFn;
+    storedIsSoldFn = isSoldFn;
+    storedOpts = opts;
 
     const { meal, mess, numMessages } = opts;
     const { times, stopTime } = computeSchedule(meal, numMessages);
@@ -135,5 +147,14 @@ function stopScheduler() {
 
 function getCurrentPrice() { return currentPrice; }
 function setCurrentPrice(price) { currentPrice = price; }
+function getCurrentMeal() { return storedOpts ? storedOpts.meal : config.DEFAULT_MEAL; }
 
-module.exports = { startScheduler, stopScheduler, getCurrentPrice, setCurrentPrice };
+function restartScheduler() {
+    console.log('🔄 [Scheduler] Restarting scheduler after un-sale...');
+    stopScheduler();
+    if (storedSendMessageFn && storedOpts) {
+        startScheduler(storedSendMessageFn, storedOnStopFn, storedIsSoldFn, storedOpts);
+    }
+}
+
+module.exports = { startScheduler, stopScheduler, getCurrentPrice, setCurrentPrice, getCurrentMeal, restartScheduler };

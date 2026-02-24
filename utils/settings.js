@@ -21,7 +21,7 @@ const settings = {
     MESS_NAMES: ['Palash', 'Kadamba Veg', 'Kadamba NV', 'Yuktahar'],
 
     DEFAULT_MEAL: 'breakfast',
-    DEFAULT_MESS: 'Palash',
+    DEFAULT_MESS: 'Kadamba Veg',
     DEFAULT_NUM_MESSAGES: 4,
 
     // ─── Pricing ────────────────────────────────────────────────
@@ -66,22 +66,25 @@ const settings = {
         `Sell ${messName} ${mealType.charAt(0).toUpperCase() + mealType.slice(1)} @${price}`,
 
     paymentInstructionMessage: () =>
-        `This transaction is handled by an automated system. Please reply with _*done*_ after payment so that the system can confirm and deliver the QR.`,
+        `_This transaction is handled by an automated system. Please reply with_ *DONE* _after payment so that system can send the QR._`,
 
     soldMessage: () =>
         `Sorry, already sold!`,
 
     unrecognizedMessage: () =>
-        `Could not understand your message. Please reply with _*done*_ after completing the payment.`,
+        `Could not understand your message. Please reply with _*DONE*_ after completing the payment.`,
 
     timeoutWarningMessage: () =>
         `⏳ Waiting for your payment confirmation for the next 30 seconds, else will move to the next buyer.`,
 
     timeoutFinalMessage: () =>
-        `Moved to the next buyer. If you still want it, reply with _*wants*_ and I'll notify you if the QR is still available.`,
+        `Moved to the next buyer. If you still want it, reply with _*WANTS*_ and I'll notify you if the QR is still available.`,
 
-    saleConfirmMessage: (buyerName) =>
-        `✅ Payment confirmed!\nThank you, ${buyerName}.\nEnjoy your meal!`,
+    saleConfirmMessage: (buyerName, mealType) =>
+        `Thank you, ${buyerName}.\nEnjoy your ${mealType}!\n\n_PS: If you were just testing the bot out of curiosity and didn't actually wants, please reply with_ *TESTING* _so the system can serve other buyers._`,
+
+    testRevertedMessage: () =>
+        `Got it! Thanks for letting me know!`,
 
     negotiationAcceptedMessage: (price) =>
         `✅ Offer of ₹${price} accepted!`,

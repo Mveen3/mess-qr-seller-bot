@@ -19,6 +19,7 @@ This bot runs 24/7, and each morning (or lunch/dinner) it:
 3. 💳 Sends your UPI ID + payment instructions automatically
 4. ✅ Delivers the QR image after the buyer confirms payment
 5. 🛑 Stops accepting buyers once the sale is complete
+6. 🔄 Allows buyers to cancel testing by replying "TESTING", which un-sells the QR and resumes the bot
 
 No more alarms. No more missed breakfasts. Just set it up once and sleep in peace.
 

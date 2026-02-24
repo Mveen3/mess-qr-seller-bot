@@ -5,7 +5,7 @@ const { MessageMedia } = require('whatsapp-web.js');
 const config = require('./settings');
 const { isBuyerKeyword, isDoneKeyword } = require('./keywordMatcher');
 const { extractPrice } = require('./priceParser');
-const { getCurrentPrice, stopScheduler } = require('./priceScheduler');
+const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
 
 // ─── State ──────────────────────────────────────────────────
 let sold = false;
@@ -18,6 +18,7 @@ let stats = {
     negotiations: 0,
     soldPrice: null,
     buyerName: null,
+    buyerId: null,
     timeSold: null,
 };
 
@@ -50,6 +51,12 @@ async function handleMessage(msg, client) {
 
         // ── Already sold ────────────────────────────────────────
         if (sold) {
+            // Un-sell if the ACTUAL buyer types "testing"
+            if (stats.buyerId === senderId && body.toLowerCase() === 'testing') {
+                await revertSale(chat, senderName);
+                return;
+            }
+
             if (isBuyerKeyword(body)) {
                 await chat.sendMessage(config.soldMessage());
                 console.log(`🚫 [Handler] Replied "Sorry Sold" to ${senderName}.`);
@@ -286,6 +293,7 @@ async function completeSale(chat, buyerName) {
     sold = true;
     stats.soldPrice = getCurrentPrice();
     stats.buyerName = buyerName;
+    stats.buyerId = currentBuyer ? currentBuyer.id : null;
     stats.timeSold = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     clearAllTimers();
@@ -302,12 +310,31 @@ async function completeSale(chat, buyerName) {
             console.warn('⚠️  [Handler] QR image not found at', config.QR_IMAGE_PATH);
         }
 
-        await chat.sendMessage(config.saleConfirmMessage(buyerName));
+        await chat.sendMessage(config.saleConfirmMessage(buyerName, getCurrentMeal()));
     } catch (err) {
         console.error('❌ [Handler] Error sending sold confirmation:', err.message);
     }
 
     printReport();
+}
+
+async function revertSale(chat, buyerName) {
+    sold = false;
+    currentBuyer = null;
+    stats.soldPrice = null;
+    stats.buyerName = null;
+    stats.buyerId = null;
+    stats.timeSold = null;
+
+    console.log(`\n⏪ [Handler] UNSOLD — ${buyerName} was just testing.`);
+
+    try {
+        await chat.sendMessage(config.testRevertedMessage());
+    } catch (err) {
+        console.error('❌ [Handler] Error sending revert confirmation:', err.message);
+    }
+
+    restartScheduler();
 }
 
 function handleUnsoldStop() {
