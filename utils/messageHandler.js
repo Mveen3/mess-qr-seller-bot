@@ -64,8 +64,8 @@ async function handleMessage(msg, client) {
             return;
         }
 
-        // ── Current buyer says "done" ───────────────────────────
-        if (currentBuyer && senderId === currentBuyer.id && isDoneKeyword(body)) {
+        // ── Current buyer says "done" or sends a screenshot ────────────────
+        if (currentBuyer && senderId === currentBuyer.id && (msg.hasMedia || isDoneKeyword(body))) {
             await completeSale(chat, senderName);
             return;
         }

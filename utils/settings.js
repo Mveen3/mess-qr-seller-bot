@@ -66,7 +66,7 @@ const settings = {
         `Sell ${messName} ${mealType.charAt(0).toUpperCase() + mealType.slice(1)} @${price}`,
 
     paymentInstructionMessage: () =>
-        `_This transaction is handled by an automated system. Please reply with_ *DONE* _after payment so that system can send the QR._`,
+        `_This transaction is handled by an automated system. Please reply with_ *DONE* _so that system can send the QR._`,
 
     soldMessage: () =>
         `Sorry, already sold!`,
