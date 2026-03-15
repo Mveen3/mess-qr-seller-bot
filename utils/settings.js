@@ -9,7 +9,7 @@ const settings = {
     // ─── Seller Info ────────────────────────────────────────────
     UPI_ID: 'mveen@upi',
     QR_IMAGE_PATH: path.resolve(__dirname, 'qr.png'),
-    PHONE_NUMBER: '8XXXXXXXX8',
+    PHONE_NUMBER: '8948966418',
 
     // ─── Meal Configuration ─────────────────────────────────────
     MEAL_TIMINGS: {
@@ -40,8 +40,8 @@ const settings = {
     BUYER_KEYWORDS: [
         'buy', 'want', 'wants', 'available', 'available?',
         'interested', 'need', 'qr', 'breakfast',
-        'still', 'selling', 'sold?', 'price',
-        'how much', 'take', 'wanna',
+        'still', 'selling', 'sold', 'price',
+        'how much', 'take', 'wanna', 'is it there',
         // Hinglish
         'kharidna', 'chahiye', 'dedo', 'dega', 'dede', 'bechna',
         'kitne', 'kitna', 'chaiye', 'lelo', 'bech',

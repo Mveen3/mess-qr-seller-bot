@@ -12,6 +12,8 @@ let sold = false;
 let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
 let inactivityTimer = null;    // 3-min silent drop timer
 let warningTimeout = null;     // 30s payment warning timer
+let reactOwnGroupMessages = false;
+let reactedGroupMessages = new Map(); // msgId -> message object (for removing reactions)
 let buyerQueue = [];
 let stats = {
     messagesReceived: 0,
@@ -23,6 +25,41 @@ let stats = {
 };
 
 function isSold() { return sold; }
+
+function extractRupeeAmount(text) {
+    if (!text || typeof text !== 'string') return null;
+
+    const match = text.match(/₹\s*([0-9]+(?:\.[0-9]{1,2})?)/i);
+    if (!match) return null;
+
+    const amount = Number(match[1]);
+    return Number.isFinite(amount) ? amount : null;
+}
+
+function isPaymentSignal(msg, currentPrice) {
+    const type = (msg?.type || '').toLowerCase();
+    const body = (msg?.body || '').trim();
+    const bodyLower = body.toLowerCase();
+
+    const paymentTypeHit = type.includes('payment') || type.includes('pay');
+
+    const paymentTextHit = [
+        'completed',
+        'sent to you',
+        'sent to naveenmishra',
+        'sent to naveen mishra',
+    ].some((pattern) => bodyLower.includes(pattern));
+
+    const hasRupeeSymbol = body.includes('₹');
+    const amount = extractRupeeAmount(body);
+    const amountEnough = amount !== null && currentPrice !== null && amount >= currentPrice;
+
+    if (paymentTypeHit) return true;
+    if (paymentTextHit) return true;
+    if (hasRupeeSymbol && amountEnough) return true;
+
+    return false;
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  MAIN MESSAGE HANDLER
@@ -64,10 +101,18 @@ async function handleMessage(msg, client) {
             return;
         }
 
-        // ── Current buyer says "done" or sends a screenshot ────────────────
-        if (currentBuyer && senderId === currentBuyer.id && (msg.hasMedia || isDoneKeyword(body))) {
-            await completeSale(chat, senderName);
-            return;
+        // ── Current buyer says "done", sends screenshot, or payment-signal arrives ────────────────
+        if (currentBuyer && senderId === currentBuyer.id) {
+            const price = getCurrentPrice();
+            const paymentSignal = isPaymentSignal(msg, price);
+
+            if (msg.hasMedia || isDoneKeyword(body) || paymentSignal) {
+                if (paymentSignal) {
+                    console.log(`💳 [Handler] Payment signal detected for ${senderName} (type: ${msg.type || 'unknown'}).`);
+                }
+                await completeSale(chat, senderName);
+                return;
+            }
         }
 
         // ── Negotiation (only if enabled) ───────────────────────
@@ -230,6 +275,77 @@ function clearAllTimers() {
     if (warningTimeout) { clearTimeout(warningTimeout); warningTimeout = null; }
 }
 
+function getMessageKey(msg) {
+    return msg?.id?._serialized || msg?.id?.id || null;
+}
+
+async function reactToRecentOwnGroupMessages(limit = 500) {
+    if (!globalClient || !reactOwnGroupMessages) return;
+
+    try {
+        const chats = await globalClient.getChats();
+        const targetGroup = chats.find((c) => c.isGroup && c.name === config.GROUP_NAME);
+        if (!targetGroup) {
+            console.warn(`⚠️  [Handler] Could not find target group "${config.GROUP_NAME}" for backfill reactions.`);
+            return;
+        }
+
+        const messages = await targetGroup.fetchMessages({ limit });
+        for (const message of messages) {
+            if (!message.fromMe) continue;
+
+            const key = getMessageKey(message);
+            if (!key || reactedGroupMessages.has(key)) continue;
+
+            try {
+                await message.react('✅');
+                reactedGroupMessages.set(key, message);
+            } catch (err) {
+                console.error('❌ [Handler] Failed to add backfill reaction:', err.message);
+            }
+        }
+
+        console.log(`✅ [Handler] Backfill reactions completed for recent messages in "${config.GROUP_NAME}".`);
+    } catch (err) {
+        console.error('❌ [Handler] Error while backfilling group reactions:', err.message);
+    }
+}
+
+async function removeAllTrackedReactions() {
+    for (const [key, message] of reactedGroupMessages.entries()) {
+        try {
+            await message.react('');
+        } catch (err) {
+            console.error(`❌ [Handler] Failed to remove reaction from message ${key}:`, err.message);
+        }
+    }
+
+    reactedGroupMessages.clear();
+
+    if (!globalClient) return;
+
+    try {
+        const chats = await globalClient.getChats();
+        const targetGroup = chats.find((c) => c.isGroup && c.name === config.GROUP_NAME);
+        if (!targetGroup) return;
+
+        const messages = await targetGroup.fetchMessages({ limit: 500 });
+        for (const message of messages) {
+            if (!message.fromMe) continue;
+
+            try {
+                await message.react('');
+            } catch (err) {
+                console.error('❌ [Handler] Failed to remove backfill reaction:', err.message);
+            }
+        }
+    } catch (err) {
+        console.error('❌ [Handler] Error while removing group reactions:', err.message);
+    }
+
+    console.log('🧹 [Handler] Cleared ✅ reactions from your target-group messages.');
+}
+
 function releaseBuyer() {
     clearAllTimers();
     currentBuyer = null;
@@ -291,6 +407,8 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice) {
 
 async function completeSale(chat, buyerName) {
     sold = true;
+    reactOwnGroupMessages = true;
+    reactedGroupMessages.clear();
     stats.soldPrice = getCurrentPrice();
     stats.buyerName = buyerName;
     stats.buyerId = currentBuyer ? currentBuyer.id : null;
@@ -315,12 +433,15 @@ async function completeSale(chat, buyerName) {
         console.error('❌ [Handler] Error sending sold confirmation:', err.message);
     }
 
+    await reactToRecentOwnGroupMessages();
     printReport();
 }
 
 async function revertSale(chat, buyerName) {
     sold = false;
     currentBuyer = null;
+    reactOwnGroupMessages = false;
+    await removeAllTrackedReactions();
     stats.soldPrice = null;
     stats.buyerName = null;
     stats.buyerId = null;
@@ -339,6 +460,8 @@ async function revertSale(chat, buyerName) {
 
 function handleUnsoldStop() {
     sold = true;
+    reactOwnGroupMessages = false;
+    reactedGroupMessages.clear();
     clearAllTimers();
     printReport();
 }
@@ -362,7 +485,25 @@ function printReport() {
 `);
 }
 
+async function handleOwnGroupMessage(msg) {
+    try {
+        if (!msg.fromMe || !reactOwnGroupMessages) return;
+
+        const chat = await msg.getChat();
+        if (!chat?.isGroup) return;
+        if (chat.name !== config.GROUP_NAME) return;
+
+        await msg.react('✅');
+        const key = getMessageKey(msg);
+        if (key) reactedGroupMessages.set(key, msg);
+
+        console.log(`✅ [Handler] Reacted to your group message in "${chat.name}".`);
+    } catch (err) {
+        console.error('❌ [Handler] Failed to react on own group message:', err.message);
+    }
+}
+
 let globalClient = null;
 function setClient(client) { globalClient = client; }
 
-module.exports = { handleMessage, isSold, handleUnsoldStop, setClient };
+module.exports = { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient };

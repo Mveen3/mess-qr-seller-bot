@@ -6,7 +6,7 @@ const config = require('./utils/settings');
 const { applyOverrides } = require('./utils/settings');
 const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
-const { handleMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
+const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
 
 // ─── Runtime state set by CLI menu ──────────────────────────
 let runOpts = {};
@@ -91,7 +91,10 @@ client.on('ready', async () => {
 // ─── Message Event ──────────────────────────────────────────
 client.on('message_create', async (msg) => {
     try {
-        if (msg.fromMe) return;
+        if (msg.fromMe) {
+            await handleOwnGroupMessage(msg);
+            return;
+        }
 
         // Extra safety: ignore status updates and group messages at main level too
         if (msg.from.endsWith('@broadcast') || msg.from.endsWith('@g.us')) return;
