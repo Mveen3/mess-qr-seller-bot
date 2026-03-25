@@ -10,8 +10,7 @@ const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = req
 // ─── State ──────────────────────────────────────────────────
 let sold = false;
 let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
-let inactivityTimer = null;    // 3-min silent drop timer
-let warningTimeout = null;     // 30s payment warning timer
+let queueTimer = null;         // Timer that triggers moving to next buyer
 let reactOwnGroupMessages = false;
 let reactedGroupMessages = new Map(); // msgId -> message object (for removing reactions)
 let buyerQueue = [];
@@ -162,21 +161,24 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
     const elapsed = Date.now() - currentBuyer.assignedAt;
 
     if (elapsed < config.BUYER_INACTIVITY_MS) {
-        // ── Within 3-min window → warn current buyer, queue new buyer ──
-        clearInactivityTimer();
-
+        // ── Within 90s window → queue new buyer and schedule timeout ──
         const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
         if (!alreadyQueued) {
             buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
             console.log(`🔢 [Handler] ${senderName} queued (position ${buyerQueue.length}).`);
         }
 
-        startPaymentWarningTimer();
+        scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
     } else {
-        // ── After 3-min window → silently drop old buyer, assign new one ──
-        console.log(`⏱️  [Handler] ${currentBuyer.name} exceeded 3-min window — silently dropping.`);
-        releaseBuyer();
-        await assignBuyer(chat, senderId, senderName);
+        // ── After 90s window → immediate move to next buyer ──
+        console.log(`⏱️  [Handler] ${currentBuyer.name} exceeded 90s window. Sending timeout msg & assigning new buyer.`);
+        
+        const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
+        if (!alreadyQueued) {
+            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
+        }
+        
+        await moveNextBuyer();
     }
 }
 
@@ -207,72 +209,44 @@ async function assignBuyer(chat, senderId, senderName) {
         console.error('❌ [Handler] Error sending buyer messages:', err.message);
     }
 
-    // Start 3-min inactivity timer (silently drops if no second buyer)
-    startInactivityTimer();
+    if (buyerQueue.length > 0) {
+        scheduleNextBuyer(config.BUYER_INACTIVITY_MS);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  TIMERS
+//  TIMERS & QUEUES
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * 3-minute inactivity timer.
- * If no second buyer arrives within this window, the current buyer
- * is silently released (no messages sent).
- */
-function startInactivityTimer() {
-    clearInactivityTimer();
-    console.log(`⏱️  [Timer] Started 3-min inactivity timer for ${currentBuyer.name}`);
+function scheduleNextBuyer(delayMs) {
+    if (queueTimer) return; // Wait until current timer finishes
 
-    inactivityTimer = setTimeout(() => {
+    console.log(`⏱️  [Timer] Checking queue in ${Math.round(delayMs / 1000)}s...`);
+
+    queueTimer = setTimeout(async () => {
+        queueTimer = null;
         if (sold || !currentBuyer) return;
-        console.log(`⏱️  [Timer] ${currentBuyer.name} — 3 min elapsed, no second buyer. Silently releasing.`);
-        releaseBuyer();
-    }, config.BUYER_INACTIVITY_MS);
+
+        console.log(`⏱️  [Timer] ${currentBuyer.name} ran out of time. Checking queue.`);
+        await moveNextBuyer();
+    }, delayMs);
 }
 
-function clearInactivityTimer() {
-    if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
-}
+async function moveNextBuyer() {
+    if (!currentBuyer) return;
 
-/**
- * 30-second payment warning timer.
- * Only triggered when a second buyer arrives within 3-min window.
- * Sends the warning message, then after 30s moves to the next buyer.
- */
-function startPaymentWarningTimer() {
-    clearAllTimers();
-    const chat = currentBuyer?.chat;
-    if (!chat) return;
-
-    console.log(`⏳ [Timer] Sending 30s payment warning to ${currentBuyer.name}`);
-
-    // Send warning immediately
-    (async () => {
-        try {
-            await chat.sendMessage(config.timeoutWarningMessage());
-        } catch (err) {
-            console.error('❌ [Timer] Error sending warning:', err.message);
-        }
-    })();
-
-    // After 30s, move to next buyer
-    warningTimeout = setTimeout(async () => {
-        try {
-            if (sold || !currentBuyer) return;
-            console.log(`⏱️  [Timer] ${currentBuyer.name} timed out — moving to next buyer.`);
-            await chat.sendMessage(config.timeoutFinalMessage());
-            releaseBuyer();
-            await tryNextBuyer();
-        } catch (err) {
-            console.error('❌ [Timer] Error in warning timeout:', err.message);
-        }
-    }, config.BUYER_TIMEOUT_WARNING_MS);
+    try {
+        await currentBuyer.chat.sendMessage(config.timeoutFinalMessage());
+    } catch (err) {
+        console.error('❌ [Timer] Error notifying leaving buyer:', err.message);
+    }
+    
+    releaseBuyer();
+    await tryNextBuyer();
 }
 
 function clearAllTimers() {
-    clearInactivityTimer();
-    if (warningTimeout) { clearTimeout(warningTimeout); warningTimeout = null; }
+    if (queueTimer) { clearTimeout(queueTimer); queueTimer = null; }
 }
 
 function getMessageKey(msg) {
@@ -394,6 +368,13 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice) {
             const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
             if (!alreadyQueued) {
                 buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
+            }
+            
+            const elapsed = Date.now() - currentBuyer.assignedAt;
+            if (elapsed < config.BUYER_INACTIVITY_MS) {
+                scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
+            } else {
+                await moveNextBuyer();
             }
         }
     } else {

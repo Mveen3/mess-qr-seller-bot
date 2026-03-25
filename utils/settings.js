@@ -33,7 +33,7 @@ const settings = {
     NEGOTIATION_MARGIN: 5,
 
     // ─── Buyer Timeout (ms) ────────────────────────────────────
-    BUYER_INACTIVITY_MS: 3 * 60 * 1000,    // 3 min — window for second buyer
+    BUYER_INACTIVITY_MS: 90 * 1000,    // 1.5 min — window for second buyer
     BUYER_TIMEOUT_WARNING_MS: 30 * 1000,    // 30s warning before moving
 
     // ─── Buyer Detection Keywords ───────────────────────────────
