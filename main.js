@@ -146,6 +146,7 @@ process.on('SIGINT', async () => {
     // Apply CLI overrides to global config
     applyOverrides({
         ENABLE_NEGOTIATION: runOpts.ENABLE_NEGOTIATION,
+        PAYMENT_VERIFICATION_ENABLED: runOpts.PAYMENT_VERIFICATION_ENABLED,
         DEFAULT_PRICE: runOpts.DEFAULT_PRICE,
     });
 

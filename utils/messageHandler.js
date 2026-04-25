@@ -12,7 +12,10 @@ let sold = false;
 let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
 let queueTimer = null;         // Timer that triggers moving to next buyer
 let reactOwnGroupMessages = false;
-let reactedGroupMessages = new Map(); // msgId -> message object (for removing reactions)
+let reactedGroupMessages = new Set(); // msgIds with applied reactions (for removing later)
+let allowTestingRevert = true;
+let paymentVerificationInProgress = false;
+let pendingScreenshotPaymentProof = null; // { buyerId, setAt, reason }
 let buyerQueue = [];
 let stats = {
     messagesReceived: 0,
@@ -60,20 +63,332 @@ function isPaymentSignal(msg, currentPrice) {
     return false;
 }
 
+function isWhatsAppPaySignal(msg) {
+    const type = (msg?.type || '').toLowerCase();
+    return type.includes('payment');
+}
+
+function isSbiBankingSender(senderId) {
+    return senderId === config.SBI_BANKING_CHAT_ID;
+}
+
+function getTodayLogKey() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function getTodayStatementDateKey() {
+    return new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
+}
+
+function normalizeStatementLine(line) {
+    return String(line || '').replace(/\s+/g, ' ').trim();
+}
+
+function ensureDailyPaymentVerificationLog() {
+    const logPath = config.PAYMENT_VERIFICATION_LOG_PATH;
+    const today = getTodayLogKey();
+
+    if (!logPath) {
+        return { date: today, transactions: [] };
+    }
+
+    let data = null;
+    if (fs.existsSync(logPath)) {
+        try {
+            data = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+        } catch (err) {
+            console.warn(`⚠️  [Handler] Payment verification log is unreadable. Recreating it: ${err.message}`);
+        }
+    }
+
+    const transactions = Array.isArray(data?.transactions) ? data.transactions : [];
+    if (!data || data.date !== today) {
+        const freshLog = { date: today, transactions: [] };
+        fs.writeFileSync(logPath, JSON.stringify(freshLog, null, 2), 'utf8');
+        console.log(`🗂️  [Handler] Initialized daily payment verification log for ${today}.`);
+        return freshLog;
+    }
+
+    return { date: today, transactions };
+}
+
+function persistPaymentVerificationLog(logData) {
+    const logPath = config.PAYMENT_VERIFICATION_LOG_PATH;
+    if (!logPath) return;
+
+    fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), 'utf8');
+}
+
+function parseMiniStatementCreditTransactions(statementText) {
+    if (!statementText || typeof statementText !== 'string') return [];
+
+    const lines = statementText.split(/\r?\n/);
+    const credits = [];
+    const pattern = /^(\d{2}\/\d{2}\/\d{4})\s*:\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*(CR|DR)\b/i;
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        const match = line.match(pattern);
+        if (!match) continue;
+
+        const date = match[1];
+        const amount = Number(match[2].replace(/,/g, ''));
+        const type = match[3].toUpperCase();
+        if (!Number.isFinite(amount) || type !== 'CR') continue;
+
+        credits.push({
+            date,
+            amount,
+            type,
+            rawLine: line,
+            normalizedLine: normalizeStatementLine(line),
+        });
+    }
+
+    return credits;
+}
+
+function looksLikeMiniStatementMessage(text) {
+    if (!text || typeof text !== 'string') return false;
+    if (!/available balance in a\/c/i.test(text)) return false;
+    if (!/\d{2}\/\d{2}\/\d{4}\s*:/.test(text)) return false;
+    return true;
+}
+
+function waitForIncomingMessage(filterFn, timeoutMs) {
+    if (!globalClient) {
+        return Promise.reject(new Error('WhatsApp client is not ready.'));
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let timer = null;
+
+        const cleanup = () => {
+            if (timer) clearTimeout(timer);
+            globalClient.removeListener('message_create', onMessageCreate);
+        };
+
+        const finish = (fn, value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            fn(value);
+        };
+
+        const onMessageCreate = (incomingMsg) => {
+            try {
+                if (incomingMsg?.fromMe) return;
+                if (!filterFn(incomingMsg)) return;
+                finish(resolve, incomingMsg);
+            } catch (_) {
+                // Ignore malformed incoming messages and continue waiting.
+            }
+        };
+
+        timer = setTimeout(() => {
+            finish(reject, new Error('Timed out waiting for expected WhatsApp message.'));
+        }, timeoutMs);
+
+        globalClient.on('message_create', onMessageCreate);
+    });
+}
+
+async function closeSbiConversationForNextQuery() {
+    if (!globalClient) return;
+
+    const promptPattern = /would you like to view more transactions\??/i;
+    let shouldSendNo = false;
+
+    try {
+        await waitForIncomingMessage(
+            (incomingMsg) =>
+                incomingMsg.from === config.SBI_BANKING_CHAT_ID &&
+                promptPattern.test((incomingMsg.body || '').trim()),
+            config.PAYMENT_VERIFICATION_FOLLOWUP_TIMEOUT_MS
+        );
+        shouldSendNo = true;
+    } catch (_) {
+        // If prompt wasn't observed in the window, still send "No" once as a best-effort reset.
+        shouldSendNo = true;
+    }
+
+    if (!shouldSendNo) return;
+
+    try {
+        await globalClient.sendMessage(config.SBI_BANKING_CHAT_ID, 'No');
+    } catch (err) {
+        console.error('❌ [Handler] Failed to send "No" to SBI bot:', err.message);
+    }
+}
+
+async function fetchMiniStatementFromSbi() {
+    if (!globalClient) throw new Error('WhatsApp client is not ready.');
+
+    await globalClient.sendMessage(config.SBI_BANKING_CHAT_ID, config.SBI_MINI_STATEMENT_COMMAND);
+    console.log('🏦 [Handler] Requested mini statement from SBI WhatsApp banking.');
+
+    const statementMsg = await waitForIncomingMessage(
+        (incomingMsg) =>
+            incomingMsg.from === config.SBI_BANKING_CHAT_ID &&
+            looksLikeMiniStatementMessage((incomingMsg.body || '').trim()),
+        config.PAYMENT_VERIFICATION_TIMEOUT_MS
+    );
+
+    await closeSbiConversationForNextQuery();
+
+    return (statementMsg.body || '').trim();
+}
+
+function evaluateStatementForPayment(statementText, currentPrice, logData) {
+    const todayStatementDate = getTodayStatementDateKey();
+    const statementCredits = parseMiniStatementCreditTransactions(statementText)
+        .filter((entry) => entry.date === todayStatementDate);
+
+    const loggedTransactions = Array.isArray(logData?.transactions) ? logData.transactions : [];
+    const usedCreditIndexes = new Set();
+
+    for (const logged of loggedTransactions) {
+        const loggedDate = String(logged?.date || '');
+        const loggedAmount = Number(logged?.amount);
+
+        const matchedIndex = statementCredits.findIndex((entry, index) => {
+            if (usedCreditIndexes.has(index)) return false;
+            if (entry.date !== loggedDate) return false;
+            if (Math.abs(entry.amount - loggedAmount) > 0.009) return false;
+            return true;
+        });
+
+        if (matchedIndex >= 0) {
+            usedCreditIndexes.add(matchedIndex);
+        }
+    }
+
+    const newCredits = statementCredits.filter((_, index) => !usedCreditIndexes.has(index));
+    if (newCredits.length === 0) {
+        return { ok: false, reason: 'no_new_credit' };
+    }
+
+    const matchingCredit = newCredits.find((entry) => entry.amount >= currentPrice);
+    if (!matchingCredit) {
+        const bestAttempt = newCredits.reduce((best, entry) => Math.max(best, entry.amount), 0);
+        return { ok: false, reason: 'insufficient_amount', receivedAmount: bestAttempt };
+    }
+
+    return { ok: true, transaction: matchingCredit };
+}
+
+function appendVerifiedPaymentToLog(logData, transaction, buyerName, expectedPrice) {
+    if (!logData || !transaction) return;
+
+    if (!Array.isArray(logData.transactions)) {
+        logData.transactions = [];
+    }
+
+    logData.transactions.push({
+        date: transaction.date,
+        amount: transaction.amount,
+        rawLine: transaction.rawLine,
+        buyerName,
+        meal: getCurrentMeal(),
+        expectedPrice,
+        verifiedAt: new Date().toISOString(),
+    });
+
+    persistPaymentVerificationLog(logData);
+}
+
+function setPendingScreenshotPaymentProof(buyerId, reason) {
+    if (!buyerId) return;
+
+    pendingScreenshotPaymentProof = {
+        buyerId,
+        reason,
+        setAt: Date.now(),
+    };
+}
+
+function clearPendingScreenshotPaymentProof() {
+    pendingScreenshotPaymentProof = null;
+}
+
+function canUseScreenshotPaymentProof(senderId) {
+    if (!pendingScreenshotPaymentProof) return false;
+    return pendingScreenshotPaymentProof.buyerId === senderId;
+}
+
+async function verifyPaymentAndCompleteSale(chat, buyerName, currentPrice) {
+    if (paymentVerificationInProgress) {
+        await chat.sendMessage(config.paymentVerificationInProgressAlreadyMessage());
+        return;
+    }
+
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        await chat.sendMessage(config.paymentVerificationSystemErrorMessage());
+        return;
+    }
+
+    clearPendingScreenshotPaymentProof();
+    paymentVerificationInProgress = true;
+    clearAllTimers();
+
+    try {
+        await chat.sendMessage(config.paymentVerificationInProgressMessage());
+
+        const logData = ensureDailyPaymentVerificationLog();
+        const statementText = await fetchMiniStatementFromSbi();
+        const verification = evaluateStatementForPayment(statementText, currentPrice, logData);
+
+        if (!verification.ok) {
+            if (verification.reason === 'insufficient_amount') {
+                setPendingScreenshotPaymentProof(currentBuyer?.id, 'insufficient_amount');
+                await chat.sendMessage(config.paymentVerificationInsufficientAmountMessage(currentPrice, verification.receivedAmount));
+            } else {
+                setPendingScreenshotPaymentProof(currentBuyer?.id, 'no_new_credit');
+                await chat.sendMessage(config.paymentVerificationNoNewCreditMessage());
+            }
+
+            if (buyerQueue.length > 0) {
+                scheduleNextBuyer(config.BUYER_INACTIVITY_MS);
+            }
+            return;
+        }
+
+        clearPendingScreenshotPaymentProof();
+        appendVerifiedPaymentToLog(logData, verification.transaction, buyerName, currentPrice);
+        console.log(`💳 [Handler] Verified payment via SBI mini statement: ₹${verification.transaction.amount.toFixed(2)}.`);
+
+        await completeSale(chat, buyerName, {
+            confirmedPayment: true,
+            allowBuyerTestingRevert: false,
+        });
+    } catch (err) {
+        console.error('❌ [Handler] Payment verification failed:', err.message);
+        await chat.sendMessage(config.paymentVerificationSystemErrorMessage());
+
+        if (buyerQueue.length > 0) {
+            scheduleNextBuyer(config.BUYER_INACTIVITY_MS);
+        }
+    } finally {
+        paymentVerificationInProgress = false;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  MAIN MESSAGE HANDLER
 // ═══════════════════════════════════════════════════════════════
 
 async function handleMessage(msg, client) {
     try {
-        stats.messagesReceived++;
-
         const senderId = msg.from;
 
         // ── Filter: only respond to personal DMs ────────────────
         if (senderId.endsWith('@broadcast') || senderId.endsWith('@g.us')) {
             return; // ignore status updates and group messages
         }
+
+        // Ignore SBI banking chat traffic from normal buyer handling flow.
+        if (isSbiBankingSender(senderId)) return;
 
         const contact = await msg.getContact();
         const senderName = contact.pushname || contact.name || senderId;
@@ -83,12 +398,13 @@ async function handleMessage(msg, client) {
         const me = client.info.wid._serialized;
         if (senderId === me) return;
 
+        stats.messagesReceived++;
         console.log(`📩 [Handler] DM from ${senderName}: "${body}"`);
 
         // ── Already sold ────────────────────────────────────────
         if (sold) {
             // Un-sell if the ACTUAL buyer types "testing"
-            if (stats.buyerId === senderId && body.toLowerCase() === 'testing') {
+            if (allowTestingRevert && stats.buyerId === senderId && body.toLowerCase() === 'testing') {
                 await revertSale(chat, senderName);
                 return;
             }
@@ -103,9 +419,40 @@ async function handleMessage(msg, client) {
         // ── Current buyer says "done", sends screenshot, or payment-signal arrives ────────────────
         if (currentBuyer && senderId === currentBuyer.id) {
             const price = getCurrentPrice();
+            const doneKeyword = isDoneKeyword(body);
             const paymentSignal = isPaymentSignal(msg, price);
+            const whatsappPaySignal = isWhatsAppPaySignal(msg);
 
-            if (msg.hasMedia || isDoneKeyword(body) || paymentSignal) {
+            if (whatsappPaySignal) {
+                console.log(`💳 [Handler] WhatsApp Pay signal detected for ${senderName}. Skipping SBI verification.`);
+                await completeSale(chat, senderName, {
+                    confirmedPayment: true,
+                    allowBuyerTestingRevert: false,
+                });
+                return;
+            }
+
+            if (config.PAYMENT_VERIFICATION_ENABLED) {
+                if (msg.hasMedia && canUseScreenshotPaymentProof(senderId)) {
+                    clearPendingScreenshotPaymentProof();
+                    await chat.sendMessage(config.paymentVerificationScreenshotAcceptedMessage());
+                    await completeSale(chat, senderName, {
+                        confirmedPayment: true,
+                        allowBuyerTestingRevert: false,
+                    });
+                    return;
+                }
+
+                if (doneKeyword) {
+                    await verifyPaymentAndCompleteSale(chat, senderName, price);
+                    return;
+                }
+
+                if (msg.hasMedia || paymentSignal) {
+                    await chat.sendMessage(config.paymentVerificationNoNewCreditMessage());
+                    return;
+                }
+            } else if (msg.hasMedia || doneKeyword || paymentSignal) {
                 if (paymentSignal) {
                     console.log(`💳 [Handler] Payment signal detected for ${senderName} (type: ${msg.type || 'unknown'}).`);
                 }
@@ -187,6 +534,7 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
 // ═══════════════════════════════════════════════════════════════
 
 async function assignBuyer(chat, senderId, senderName) {
+    clearPendingScreenshotPaymentProof();
     currentBuyer = {
         id: senderId,
         name: senderName,
@@ -203,7 +551,7 @@ async function assignBuyer(chat, senderId, senderName) {
         const price = getCurrentPrice();
         await chat.sendMessage(config.payViaPhoneMessage(price, config.PHONE_NUMBER));
 
-        await chat.sendMessage(config.paymentInstructionMessage());
+        await chat.sendMessage(config.paymentInstructionMessage(config.PAYMENT_VERIFICATION_ENABLED));
         console.log('📤 [Handler] Payment instruction sent.');
     } catch (err) {
         console.error('❌ [Handler] Error sending buyer messages:', err.message);
@@ -253,45 +601,201 @@ function getMessageKey(msg) {
     return msg?.id?._serialized || msg?.id?.id || null;
 }
 
+async function findTargetGroupChat() {
+    if (!globalClient) return null;
+
+    const chats = await globalClient.getChats();
+    return chats.find((c) => c.isGroup && c.name === config.GROUP_NAME) || null;
+}
+
+async function fetchOwnMessageIdsCompat(chatId, limit = 500) {
+    if (!globalClient?.pupPage || !chatId) return [];
+
+    return globalClient.pupPage.evaluate(async (serializedChatId, maxLimit) => {
+        const limitValue = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 500;
+
+        const toMessageId = (msg) => {
+            const id = msg?.id;
+            if (!id) return null;
+            return id._serialized || id.id || null;
+        };
+
+        const isOwnNonNotificationMessage = (msg) =>
+            Boolean(msg) && !msg.isNotification && (msg?.id?.fromMe === true || msg?.fromMe === true);
+
+        const getChatModel = async () => {
+            const widFactory = window.Store?.WidFactory;
+            const chatStore = window.Store?.Chat;
+            if (!widFactory || !chatStore) return null;
+
+            const wid = widFactory.createWid(serializedChatId);
+            return chatStore.get(wid) || await chatStore.find(wid);
+        };
+
+        const chat = await getChatModel();
+        if (!chat?.msgs) return [];
+
+        const seen = new Set();
+        const collected = [];
+
+        const collectBatch = (messages) => {
+            if (!Array.isArray(messages)) return false;
+
+            const orderedMessages = [...messages].sort((a, b) => (a?.t || 0) - (b?.t || 0));
+            for (const message of orderedMessages) {
+                if (!isOwnNonNotificationMessage(message)) continue;
+
+                const messageId = toMessageId(message);
+                if (!messageId || seen.has(messageId)) continue;
+
+                seen.add(messageId);
+                collected.push(messageId);
+                if (collected.length >= limitValue) return true;
+            }
+
+            return false;
+        };
+
+        const getLoadedMessages = () => {
+            if (!chat.msgs) return [];
+            if (typeof chat.msgs.getModelsArray === 'function') return chat.msgs.getModelsArray();
+            if (Array.isArray(chat.msgs.models)) return chat.msgs.models;
+            return [];
+        };
+
+        collectBatch(getLoadedMessages());
+
+        const loaders = [];
+        const conversationMsgs = window.Store?.ConversationMsgs;
+        if (conversationMsgs?.loadEarlierMsgs) {
+            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat, chat.msgs));
+            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat.msgs, chat));
+            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat));
+            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat.msgs));
+        }
+
+        const msgStore = window.Store?.Msg;
+        if (msgStore?.loadEarlierMsgs) {
+            loaders.push(() => msgStore.loadEarlierMsgs(chat, chat.msgs));
+            loaders.push(() => msgStore.loadEarlierMsgs(chat.msgs, chat));
+            loaders.push(() => msgStore.loadEarlierMsgs(chat));
+            loaders.push(() => msgStore.loadEarlierMsgs(chat.msgs));
+        }
+
+        let noProgressRounds = 0;
+        while (collected.length < limitValue && loaders.length > 0 && noProgressRounds < 3) {
+            let progress = false;
+
+            for (const loadEarlier of loaders) {
+                try {
+                    const loaded = await loadEarlier();
+                    const before = collected.length;
+
+                    if (Array.isArray(loaded)) {
+                        collectBatch(loaded);
+                    } else if (Array.isArray(loaded?.messages)) {
+                        collectBatch(loaded.messages);
+                    } else if (Array.isArray(loaded?.models)) {
+                        collectBatch(loaded.models);
+                    }
+
+                    if (collected.length > before) {
+                        progress = true;
+                        break;
+                    }
+                } catch (_) {
+                    // Try the next loadEarlier signature.
+                }
+            }
+
+            const beforeLoaded = collected.length;
+            collectBatch(getLoadedMessages());
+            if (collected.length > beforeLoaded) {
+                progress = true;
+            }
+
+            noProgressRounds = progress ? 0 : noProgressRounds + 1;
+        }
+
+        if (collected.length > limitValue) {
+            return collected.slice(collected.length - limitValue);
+        }
+
+        return collected;
+    }, chatId, limit);
+}
+
+async function fetchOwnGroupMessagesForBackfill(limit = 500) {
+    const targetGroup = await findTargetGroupChat();
+    if (!targetGroup) {
+        console.warn(`⚠️  [Handler] Could not find target group "${config.GROUP_NAME}" for backfill reactions.`);
+        return { targetGroup: null, messages: [] };
+    }
+
+    try {
+        const messageIds = await fetchOwnMessageIdsCompat(targetGroup.id._serialized, limit);
+        const messages = [];
+
+        for (const messageId of messageIds) {
+            try {
+                const message = await globalClient.getMessageById(messageId);
+                if (!message || !message.fromMe) continue;
+                messages.push(message);
+            } catch (err) {
+                console.error(`❌ [Handler] Failed to hydrate message ${messageId}:`, err.message);
+            }
+        }
+
+        return { targetGroup, messages };
+    } catch (err) {
+        console.error('❌ [Handler] Failed to load recent own group messages for reactions:', err.message);
+        return { targetGroup, messages: [] };
+    }
+}
+
+async function removeReactionByMessageId(messageId) {
+    if (!globalClient || !messageId) return;
+
+    try {
+        const message = await globalClient.getMessageById(messageId);
+        if (!message) return;
+
+        await message.react('');
+    } catch (err) {
+        console.error(`❌ [Handler] Failed to remove reaction from message ${messageId}:`, err.message);
+    }
+}
+
 async function reactToRecentOwnGroupMessages(limit = 500) {
     if (!globalClient || !reactOwnGroupMessages) return;
 
     try {
-        const chats = await globalClient.getChats();
-        const targetGroup = chats.find((c) => c.isGroup && c.name === config.GROUP_NAME);
-        if (!targetGroup) {
-            console.warn(`⚠️  [Handler] Could not find target group "${config.GROUP_NAME}" for backfill reactions.`);
-            return;
-        }
+        const { targetGroup, messages } = await fetchOwnGroupMessagesForBackfill(limit);
+        if (!targetGroup) return;
 
-        const messages = await targetGroup.fetchMessages({ limit });
+        let reactedCount = 0;
         for (const message of messages) {
-            if (!message.fromMe) continue;
-
             const key = getMessageKey(message);
             if (!key || reactedGroupMessages.has(key)) continue;
 
             try {
                 await message.react('✅');
-                reactedGroupMessages.set(key, message);
+                reactedGroupMessages.add(key);
+                reactedCount++;
             } catch (err) {
                 console.error('❌ [Handler] Failed to add backfill reaction:', err.message);
             }
         }
 
-        console.log(`✅ [Handler] Backfill reactions completed for recent messages in "${config.GROUP_NAME}".`);
+        console.log(`✅ [Handler] Backfill reactions completed for ${reactedCount} recent messages in "${config.GROUP_NAME}".`);
     } catch (err) {
         console.error('❌ [Handler] Error while backfilling group reactions:', err.message);
     }
 }
 
 async function removeAllTrackedReactions() {
-    for (const [key, message] of reactedGroupMessages.entries()) {
-        try {
-            await message.react('');
-        } catch (err) {
-            console.error(`❌ [Handler] Failed to remove reaction from message ${key}:`, err.message);
-        }
+    for (const key of reactedGroupMessages.values()) {
+        await removeReactionByMessageId(key);
     }
 
     reactedGroupMessages.clear();
@@ -299,19 +803,14 @@ async function removeAllTrackedReactions() {
     if (!globalClient) return;
 
     try {
-        const chats = await globalClient.getChats();
-        const targetGroup = chats.find((c) => c.isGroup && c.name === config.GROUP_NAME);
+        const { targetGroup, messages } = await fetchOwnGroupMessagesForBackfill(500);
         if (!targetGroup) return;
 
-        const messages = await targetGroup.fetchMessages({ limit: 500 });
         for (const message of messages) {
             if (!message.fromMe) continue;
-
-            try {
-                await message.react('');
-            } catch (err) {
-                console.error('❌ [Handler] Failed to remove backfill reaction:', err.message);
-            }
+            const key = getMessageKey(message);
+            if (!key) continue;
+            await removeReactionByMessageId(key);
         }
     } catch (err) {
         console.error('❌ [Handler] Error while removing group reactions:', err.message);
@@ -322,6 +821,7 @@ async function removeAllTrackedReactions() {
 
 function releaseBuyer() {
     clearAllTimers();
+    clearPendingScreenshotPaymentProof();
     currentBuyer = null;
     console.log('🔄 [Handler] Buyer reservation released.');
 }
@@ -386,9 +886,16 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice) {
 //  SALE COMPLETION
 // ═══════════════════════════════════════════════════════════════
 
-async function completeSale(chat, buyerName) {
+async function completeSale(chat, buyerName, options = {}) {
+    const confirmedPayment = options.confirmedPayment === true;
+    const allowBuyerTestingRevert = options.allowBuyerTestingRevert !== undefined
+        ? options.allowBuyerTestingRevert
+        : !confirmedPayment;
+
     sold = true;
     reactOwnGroupMessages = true;
+    allowTestingRevert = allowBuyerTestingRevert;
+    clearPendingScreenshotPaymentProof();
     reactedGroupMessages.clear();
     stats.soldPrice = getCurrentPrice();
     stats.buyerName = buyerName;
@@ -409,7 +916,11 @@ async function completeSale(chat, buyerName) {
             console.warn('⚠️  [Handler] QR image not found at', config.QR_IMAGE_PATH);
         }
 
-        await chat.sendMessage(config.saleConfirmMessage(buyerName, getCurrentMeal()));
+        if (confirmedPayment) {
+            await chat.sendMessage(config.saleConfirmPaidMessage(buyerName, getCurrentMeal()));
+        } else {
+            await chat.sendMessage(config.saleConfirmMessage(buyerName, getCurrentMeal()));
+        }
     } catch (err) {
         console.error('❌ [Handler] Error sending sold confirmation:', err.message);
     }
@@ -422,6 +933,9 @@ async function revertSale(chat, buyerName) {
     sold = false;
     currentBuyer = null;
     reactOwnGroupMessages = false;
+    allowTestingRevert = true;
+    paymentVerificationInProgress = false;
+    clearPendingScreenshotPaymentProof();
     await removeAllTrackedReactions();
     stats.soldPrice = null;
     stats.buyerName = null;
@@ -442,6 +956,9 @@ async function revertSale(chat, buyerName) {
 function handleUnsoldStop() {
     sold = true;
     reactOwnGroupMessages = false;
+    allowTestingRevert = false;
+    paymentVerificationInProgress = false;
+    clearPendingScreenshotPaymentProof();
     reactedGroupMessages.clear();
     clearAllTimers();
     printReport();
@@ -476,7 +993,7 @@ async function handleOwnGroupMessage(msg) {
 
         await msg.react('✅');
         const key = getMessageKey(msg);
-        if (key) reactedGroupMessages.set(key, msg);
+        if (key) reactedGroupMessages.add(key);
 
         console.log(`✅ [Handler] Reacted to your group message in "${chat.name}".`);
     } catch (err) {
@@ -485,6 +1002,14 @@ async function handleOwnGroupMessage(msg) {
 }
 
 let globalClient = null;
-function setClient(client) { globalClient = client; }
+function setClient(client) {
+    globalClient = client;
+
+    try {
+        ensureDailyPaymentVerificationLog();
+    } catch (err) {
+        console.error('❌ [Handler] Failed to initialize daily payment verification log:', err.message);
+    }
+}
 
 module.exports = { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient };

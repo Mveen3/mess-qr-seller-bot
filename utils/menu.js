@@ -51,6 +51,7 @@ async function showMenu() {
         console.log(`\n✅ Using default settings — ${config.DEFAULT_MESS} ${meal.charAt(0).toUpperCase() + meal.slice(1)} @ ₹${config.DEFAULT_PRICE}\n`);
         return {
             ENABLE_NEGOTIATION: config.ENABLE_NEGOTIATION,
+            PAYMENT_VERIFICATION_ENABLED: config.PAYMENT_VERIFICATION_ENABLED,
             DEFAULT_PRICE: config.DEFAULT_PRICE,
             _meal: meal,
             _mess: config.DEFAULT_MESS,
@@ -65,11 +66,21 @@ async function showMenu() {
     const negoInput = await ask(rl, `  Enable negotiation? [0=No / 1=Yes] (default: 0): `);
     const enableNegotiation = negoInput === '1';
 
-    // 2. Starting price
+    // 2. Payment verification
+    const paymentVerifyDefault = config.PAYMENT_VERIFICATION_ENABLED ? '1' : '0';
+    const paymentVerifyInput = await ask(
+        rl,
+        `  Enable payment verification? [0=No / 1=Yes] (default: ${paymentVerifyDefault}): `
+    );
+    const enablePaymentVerification = paymentVerifyInput === ''
+        ? config.PAYMENT_VERIFICATION_ENABLED
+        : paymentVerifyInput === '1';
+
+    // 3. Starting price
     const priceInput = await ask(rl, `  Starting price? (default: ${config.DEFAULT_PRICE}): `);
     const price = priceInput ? parseInt(priceInput, 10) : config.DEFAULT_PRICE;
 
-    // 3. Meal type
+    // 4. Meal type
     const detectedMeal = detectMeal();
     const mealInput = await ask(
         rl,
@@ -79,14 +90,14 @@ async function showMenu() {
         ? mealInput.toLowerCase()
         : detectedMeal;
 
-    // 4. Mess name
+    // 5. Mess name
     const messOptions = config.MESS_NAMES.join(' / ');
     const messInput = await ask(rl, `  Mess name? [${messOptions}] (default: ${config.DEFAULT_MESS}): `);
     const mess = config.MESS_NAMES.find(
         (m) => m.toLowerCase() === (messInput || '').toLowerCase()
     ) || config.DEFAULT_MESS;
 
-    // 5. Number of messages
+    // 6. Number of messages
     const numInput = await ask(rl, `  Number of messages to send? (default: ${config.DEFAULT_NUM_MESSAGES}): `);
     const numMessages = numInput ? parseInt(numInput, 10) : config.DEFAULT_NUM_MESSAGES;
 
@@ -97,6 +108,7 @@ async function showMenu() {
   ✅ Custom settings applied          
 ──────────────────────────────────────
   Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${' '.repeat(21 - (enableNegotiation ? 3 : 2))}
+  Verify Pay  : ${enablePaymentVerification ? 'Yes' : 'No'}${' '.repeat(21 - (enablePaymentVerification ? 3 : 2))}
   Price       : ₹${price}${' '.repeat(20 - String(price).length)}
   Meal        : ${meal.charAt(0).toUpperCase() + meal.slice(1)}${' '.repeat(22 - meal.length)}
   Mess        : ${mess}${' '.repeat(22 - mess.length)}
@@ -106,6 +118,7 @@ async function showMenu() {
 
     return {
         ENABLE_NEGOTIATION: enableNegotiation,
+        PAYMENT_VERIFICATION_ENABLED: enablePaymentVerification,
         DEFAULT_PRICE: price,
         _meal: meal,
         _mess: mess,
