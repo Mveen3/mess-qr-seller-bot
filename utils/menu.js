@@ -1,7 +1,7 @@
 'use strict';
 
 const readline = require('readline');
-const config = require('./settings');
+const config = require('./config');
 
 function createInterface() {
     return readline.createInterface({
@@ -16,12 +16,40 @@ function ask(rl, question) {
     });
 }
 
+function parseIntegerOrDefault(input, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+    if (input === '') return fallback;
+
+    const parsed = Number.parseInt(input, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(Math.max(parsed, min), max);
+}
+
+function safeRepeat(count) {
+    return ' '.repeat(Math.max(0, count));
+}
+
+function formatIndexedOptions(options) {
+    return options.map((label, index) => `[${index}] ${label}`).join(' / ');
+}
+
+function parseIndexedChoice(input, options, defaultIndex) {
+    if (!Array.isArray(options) || options.length === 0) return null;
+    if (input === '') return options[defaultIndex] ?? options[0];
+
+    const index = Number.parseInt(input, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= options.length) {
+        return options[defaultIndex] ?? options[0];
+    }
+
+    return options[index];
+}
+
 /**
  * Detect the meal type based on current time.
  */
 function detectMeal() {
-    const now = new Date();
-    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const nowInIst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const nowMins = nowInIst.getHours() * 60 + nowInIst.getMinutes();
 
     for (const [meal, { start, end }] of Object.entries(config.MEAL_TIMINGS)) {
         const [eH, eM] = end.split(':').map(Number);
@@ -78,28 +106,30 @@ async function showMenu() {
 
     // 3. Starting price
     const priceInput = await ask(rl, `  Starting price? (default: ${config.DEFAULT_PRICE}): `);
-    const price = priceInput ? parseInt(priceInput, 10) : config.DEFAULT_PRICE;
+    const price = parseIntegerOrDefault(priceInput, config.DEFAULT_PRICE, { min: 1, max: 500 });
 
     // 4. Meal type
     const detectedMeal = detectMeal();
+    const mealOptions = ['breakfast', 'lunch', 'dinner'];
+    const detectedMealIndex = Math.max(0, mealOptions.indexOf(detectedMeal));
     const mealInput = await ask(
         rl,
-        `  Meal type? [breakfast/lunch/dinner] (default: ${detectedMeal}): `
+        `  Meal type? ${formatIndexedOptions(mealOptions)} (default: ${detectedMealIndex}): `
     );
-    const meal = ['breakfast', 'lunch', 'dinner'].includes(mealInput.toLowerCase())
-        ? mealInput.toLowerCase()
-        : detectedMeal;
+    const meal = parseIndexedChoice(mealInput, mealOptions, detectedMealIndex);
 
     // 5. Mess name
-    const messOptions = config.MESS_NAMES.join(' / ');
-    const messInput = await ask(rl, `  Mess name? [${messOptions}] (default: ${config.DEFAULT_MESS}): `);
-    const mess = config.MESS_NAMES.find(
-        (m) => m.toLowerCase() === (messInput || '').toLowerCase()
-    ) || config.DEFAULT_MESS;
+    const messOptions = config.MESS_NAMES;
+    const defaultMessIndex = Math.max(0, messOptions.findIndex((name) => name === config.DEFAULT_MESS));
+    const messInput = await ask(
+        rl,
+        `  Mess name? ${formatIndexedOptions(messOptions)} (default: ${defaultMessIndex}): `
+    );
+    const mess = parseIndexedChoice(messInput, messOptions, defaultMessIndex);
 
     // 6. Number of messages
     const numInput = await ask(rl, `  Number of messages to send? (default: ${config.DEFAULT_NUM_MESSAGES}): `);
-    const numMessages = numInput ? parseInt(numInput, 10) : config.DEFAULT_NUM_MESSAGES;
+    const numMessages = parseIntegerOrDefault(numInput, config.DEFAULT_NUM_MESSAGES, { min: 1, max: 24 });
 
     rl.close();
 
@@ -107,12 +137,12 @@ async function showMenu() {
 ──────────────────────────────────────
   ✅ Custom settings applied          
 ──────────────────────────────────────
-  Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${' '.repeat(21 - (enableNegotiation ? 3 : 2))}
-  Verify Pay  : ${enablePaymentVerification ? 'Yes' : 'No'}${' '.repeat(21 - (enablePaymentVerification ? 3 : 2))}
-  Price       : ₹${price}${' '.repeat(20 - String(price).length)}
-  Meal        : ${meal.charAt(0).toUpperCase() + meal.slice(1)}${' '.repeat(22 - meal.length)}
-  Mess        : ${mess}${' '.repeat(22 - mess.length)}
-  Messages    : ${numMessages}${' '.repeat(22 - String(numMessages).length)}
+  Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${safeRepeat(21 - (enableNegotiation ? 3 : 2))}
+  Verify Pay  : ${enablePaymentVerification ? 'Yes' : 'No'}${safeRepeat(21 - (enablePaymentVerification ? 3 : 2))}
+  Price       : ₹${price}${safeRepeat(20 - String(price).length)}
+  Meal        : ${meal.charAt(0).toUpperCase() + meal.slice(1)}${safeRepeat(22 - meal.length)}
+  Mess        : ${mess}${safeRepeat(22 - mess.length)}
+  Messages    : ${numMessages}${safeRepeat(22 - String(numMessages).length)}
 ──────────────────────────────────────
 `);
 

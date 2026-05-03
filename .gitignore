@@ -3,5 +3,4 @@ node_modules/
 .wwebjs_cache/
 upcoming_features.txt
 error.log
-utils/payment_verification_log.json
 .codex

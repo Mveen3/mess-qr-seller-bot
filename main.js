@@ -1,9 +1,19 @@
 'use strict';
 
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = function patchedEmitWarning(warning, ...args) {
+    const warningCode =
+        (warning && typeof warning === 'object' && warning.code) ||
+        (typeof args[1] === 'string' ? args[1] : null);
+
+    if (warningCode === 'DEP0040') return;
+    return originalEmitWarning.call(this, warning, ...args);
+};
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const config = require('./utils/settings');
-const { applyOverrides } = require('./utils/settings');
+const config = require('./utils/config');
+const { applyOverrides } = require('./utils/config');
 const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
@@ -58,7 +68,7 @@ client.on('ready', async () => {
         if (!targetChat) {
             console.error(`❌ Group "${config.GROUP_NAME}" not found! Available groups:`);
             chats.filter((c) => c.isGroup).forEach((c) => console.log(`   • ${c.name}`));
-            console.error('\nPlease update GROUP_NAME in settings.js and restart.');
+            console.error('\nPlease update GROUP_NAME in Setting.txt and restart.');
             return;
         }
 

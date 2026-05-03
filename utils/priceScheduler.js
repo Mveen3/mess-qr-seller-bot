@@ -1,6 +1,6 @@
 'use strict';
 
-const config = require('./settings');
+const config = require('./config');
 
 let timers = [];
 let currentPrice = null;
@@ -21,6 +21,7 @@ let storedOpts = null;
 function computeSchedule(meal, numMessages) {
     const timing = config.MEAL_TIMINGS[meal];
     if (!timing) throw new Error(`Unknown meal type: ${meal}`);
+    const safeNumMessages = Number.isFinite(numMessages) ? Math.max(1, Math.floor(numMessages)) : 1;
 
     const today = new Date();
 
@@ -39,10 +40,10 @@ function computeSchedule(meal, numMessages) {
         endDate.setDate(endDate.getDate() + 1);
     }
     const totalMs = endDate.getTime() - startDate.getTime();
-    const intervalMs = numMessages > 1 ? totalMs / numMessages : totalMs;
+    const intervalMs = safeNumMessages > 1 ? totalMs / safeNumMessages : totalMs;
 
     const times = [];
-    for (let i = 0; i < numMessages; i++) {
+    for (let i = 0; i < safeNumMessages; i++) {
         times.push(new Date(startDate.getTime() + i * intervalMs));
     }
 
@@ -58,15 +59,21 @@ function computeSchedule(meal, numMessages) {
  */
 function startScheduler(sendMessageFn, onStopFn, isSoldFn, opts) {
     stopped = false;
-    currentPrice = config.DEFAULT_PRICE;
+    currentPrice = Number.isFinite(config.DEFAULT_PRICE) && config.DEFAULT_PRICE > 0 ? config.DEFAULT_PRICE : 1;
+
+    const meal = config.MEAL_TIMINGS[opts?.meal] ? opts.meal : config.DEFAULT_MEAL;
+    const mess = typeof opts?.mess === 'string' && opts.mess.trim() ? opts.mess.trim() : config.DEFAULT_MESS;
+    const numMessages = Number.isFinite(opts?.numMessages)
+        ? Math.max(1, Math.floor(opts.numMessages))
+        : Math.max(1, Math.floor(config.DEFAULT_NUM_MESSAGES));
+    const normalizedOpts = { meal, mess, numMessages };
 
     // Save for a potential restart
     storedSendMessageFn = sendMessageFn;
     storedOnStopFn = onStopFn;
     storedIsSoldFn = isSoldFn;
-    storedOpts = opts;
+    storedOpts = normalizedOpts;
 
-    const { meal, mess, numMessages } = opts;
     const { times, stopTime } = computeSchedule(meal, numMessages);
     const now = Date.now();
 
@@ -74,7 +81,8 @@ function startScheduler(sendMessageFn, onStopFn, isSoldFn, opts) {
     console.log(`📅 [Scheduler] Meal: ${meal} | Mess: ${mess} | Messages: ${numMessages}`);
     console.log(`📅 [Scheduler] Schedule:`);
 
-    let priceForStep = config.DEFAULT_PRICE;
+    let priceForStep = currentPrice;
+    const priceDrop = Number.isFinite(config.PRICE_DROP) && config.PRICE_DROP > 0 ? config.PRICE_DROP : 0;
 
     for (let i = 0; i < times.length; i++) {
         const sendTime = times[i];
@@ -109,7 +117,7 @@ function startScheduler(sendMessageFn, onStopFn, isSoldFn, opts) {
             // Don't update currentPrice — it stays at DEFAULT_PRICE
         }
 
-        priceForStep = Math.max(priceForStep - config.PRICE_DROP, 0);
+        priceForStep = Math.max(priceForStep - priceDrop, 0);
     }
 
     // Auto-stop timer

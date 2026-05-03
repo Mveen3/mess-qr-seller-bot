@@ -1,66 +1,75 @@
-# 🍽️ Mess QR Seller Bot
+# Mess QR Selling Bot
 
-## The Problem
+WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM buyer handling, queue management, and optional SBI balance-based payment verification.
 
-At IIIT Hyderabad, mess charges are deducted for all 30 days — whether you eat or not. You can cancel only **5 meals per month**. For students like me who'd never wake up at 7:30 AM, that means paying ₹1300+ for breakfasts we'll never touch.
+## Features
 
-So I built a system. Students who *do* go to the mess cancel their 5 days and buy their QR codes from students like me through a WhatsApp group — **"Mess Buy Sell @ IIITH"**. They pay ₹15–30 instead of ₹44. I earn money from a meal that otherwise I won't eat anyway. **Win-win.**
+1. Scheduled group posts for breakfast/lunch/dinner windows.
+2. Dynamic price drops across configured message slots.
+3. Buyer intent detection from DM keywords.
+4. Buyer queue with inactivity timeout and warning message.
+5. Optional negotiation mode with configurable margin.
+6. Optional payment verification through SBI WhatsApp Banking balance checks.
+7. Screenshot fallback flow if auto-verification is delayed.
+8. QR delivery + sale confirmation + report after successful sale.
+9. `TESTING` revert for the actual buyer to mark the QR unsold and restart scheduler.
 
-But there was still one catch — **I had to wake up at 7:30 AM to post the sell message.** The very thing I was trying to avoid.
+## How Payment Verification Works
 
-So I automated it.
+When verification is enabled:
 
-## What This Bot Does
+1. Bot asks SBI WhatsApp Banking for balance using `SBI_BALANCE_COMMAND`.
+2. Bot parses messages like `Available Balance in A/c ... Rs. *1474.13 CR*` (multiline and formatted text supported).
+3. Verification uses balance increase (`latestBalance - knownBalance`) to detect credited payment.
+4. If credited amount is below expected price, buyer is asked to pay the remaining amount.
+5. If no credit is detected, buyer is asked to retry with `DONE` or share screenshot.
+6. If buyer shares screenshot after insufficient/no-credit prompt, payment can be accepted.
 
-This bot runs 24/7, and each morning (or lunch/dinner) it:
+Verified and partial attempts are written to `PAYMENT_VERIFICATION_LOG_PATH`.
 
-1. 📢 Posts a sell message in the group at scheduled times with auto price drops
-2. 🤖 Detects buyers who DM you with keywords like *"buy"*, *"want"*, *"available"*
-3. 💳 Sends your UPI ID + payment instructions automatically
-4. ✅ Delivers the QR image after the buyer confirms payment
-5. 🛑 Stops accepting buyers once the sale is complete
-6. 🔄 Allows buyers to cancel testing by replying "TESTING", which un-sells the QR and resumes the bot
+## Project Structure
 
-No more alarms. No more missed breakfasts. Just set it up once and sleep in peace.
-
----
+- `main.js`: client bootstrap, auth lifecycle, scheduler startup.
+- `Setting.txt`: user-editable runtime configuration.
+- `utils/config.js`: settings parser + defaults + message templates.
+- `utils/priceScheduler.js`: timed posting and auto-stop logic.
+- `utils/messageHandler.js`: DM flow, queueing, payment verification, sale completion.
+- `utils/keywordMatcher.js`: buyer/done intent matching.
+- `utils/priceParser.js`: negotiation number extraction.
 
 ## Setup
 
-1. Install [Node.js](https://nodejs.org/) (v16+)
-2. Open terminal in this folder:
-   ```
-   npm install
-   ```
-3. Put your **UPI QR image** as `utils/qr.png`
+1. Install Node.js 16 or newer.
+2. Install dependencies:
 
-## Configuration
+```bash
+npm install
+```
 
-Open `utils/settings.js` and update:
-
-| Field | What to change |
-|-------|---------------|
-| `UPI_ID` | Your UPI ID |
-| `PHONE_NUMBER` | Your phone number |
-| `GROUP_NAME` | Your WhatsApp group name |
-| `MESS_NAMES` | Available mess options |
-| `DEFAULT_PRICE` | Starting price |
+3. Put your QR image at `utils/qr.png` (or change `QR_IMAGE_PATH` in `Setting.txt`).
+4. Update key values in `Setting.txt`: `GROUP_NAME`, `UPI_ID`, `PHONE_NUMBER`, `MESS_NAMES`, `DEFAULT_PRICE`, and `SBI_BANKING_CHAT_ID` (if verification is enabled).
 
 ## Run
 
-```
+```bash
 node main.js
 ```
 
-- **First time** — scan the QR shown in terminal with WhatsApp
-- **After that** — auto-logs in, no QR needed
+At startup:
+
+1. Choose default mode (`0`) or custom mode (`1`).
+2. On first login, scan the WhatsApp QR in terminal.
+3. Bot loads group, starts scheduler, and listens to DMs.
+
+## Important Config Flags
+
+- `PAYMENT_VERIFICATION_ENABLED=true|false`
+- `PAYMENT_VERIFICATION_TIMEOUT_MS=45000`
+- `BUYER_INACTIVITY_MS=90000`
+- `BUYER_TIMEOUT_WARNING_MS=30000`
+- `ENABLE_NEGOTIATION=true|false`
+- `NEGOTIATION_MARGIN=5`
 
 ## Stop
 
-Press `Ctrl+C` in the terminal.
-
----
-
-## 🤖 LLM Declaration
-
-The concept, approach, and system design are entirely my own. The code was written with the LLM.
+Press `Ctrl+C` to stop gracefully.

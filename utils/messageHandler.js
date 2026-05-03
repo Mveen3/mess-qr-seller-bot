@@ -1,8 +1,9 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const { MessageMedia } = require('whatsapp-web.js');
-const config = require('./settings');
+const config = require('./config');
 const { isBuyerKeyword, isDoneKeyword } = require('./keywordMatcher');
 const { extractPrice } = require('./priceParser');
 const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
@@ -11,12 +12,16 @@ const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = req
 let sold = false;
 let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
 let queueTimer = null;         // Timer that triggers moving to next buyer
+let queueWarningTimer = null;  // Timer that warns current buyer before timeout
 let reactOwnGroupMessages = false;
 let reactedGroupMessages = new Set(); // msgIds with applied reactions (for removing later)
 let allowTestingRevert = true;
 let paymentVerificationInProgress = false;
 let pendingScreenshotPaymentProof = null; // { buyerId, setAt, reason }
 let buyerQueue = [];
+let currentBuyerPaidAmount = 0;
+let sbiKnownBalance = null;
+const knownSbiSenderIds = new Set([config.SBI_BANKING_CHAT_ID]);
 let stats = {
     messagesReceived: 0,
     negotiations: 0,
@@ -68,8 +73,49 @@ function isWhatsAppPaySignal(msg) {
     return type.includes('payment');
 }
 
-function isSbiBankingSender(senderId) {
-    return senderId === config.SBI_BANKING_CHAT_ID;
+function rememberSbiSender(senderId) {
+    if (!senderId) return;
+    knownSbiSenderIds.add(senderId);
+}
+
+function looksLikeSbiBotPrompt(text) {
+    if (!text || typeof text !== 'string') return false;
+
+    const normalized = normalizeSbiMessageText(text).toLowerCase();
+    return (
+        normalized.includes('dear customer') ||
+        normalized.includes("it seems you've been inactive") ||
+        normalized.includes('please clear this chat for safety') ||
+        normalized.includes('available balance in a/c') ||
+        normalized.includes('please wait while we fetch your balance details') ||
+        normalized.includes('balance details') ||
+        normalized.includes('mini statement') ||
+        normalized.includes('get balance') ||
+        normalized.includes('get mini statement') ||
+        normalized.includes('debit card services') ||
+        normalized.includes('interest certificate') ||
+        normalized.includes('tap below to explore more services') ||
+        normalized.includes('would you like to view more transactions') ||
+        normalized.includes('please choose from any of the options below') ||
+        normalized.includes('please choose appropriate options given below') ||
+        normalized.includes('to continue, please type "hi" to access the main menu') ||
+        normalized.includes("to continue, please type 'hi' to access the main menu")
+    );
+}
+
+function isSbiBankingSender(senderId, body = '', options = {}) {
+    const allowHeuristic = options.allowHeuristic === true;
+
+    if (!senderId) return false;
+    if (knownSbiSenderIds.has(senderId)) return true;
+    if (!allowHeuristic) return false;
+
+    if (looksLikeMiniStatementMessage(body) || looksLikeBalanceMessage(body) || looksLikeSbiBotPrompt(body)) {
+        rememberSbiSender(senderId);
+        return true;
+    }
+
+    return false;
 }
 
 function getTodayLogKey() {
@@ -84,6 +130,24 @@ function normalizeStatementLine(line) {
     return String(line || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeSbiMessageText(text) {
+    return String(text || '')
+        .replace(/[\u200e\u200f]/g, '')
+        .replace(/[\u00a0]/g, ' ')
+        .replace(/[*_~`]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function ensureParentDirForFile(filePath) {
+    if (!filePath) return;
+
+    const parentDir = path.dirname(filePath);
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+    }
+}
+
 function ensureDailyPaymentVerificationLog() {
     const logPath = config.PAYMENT_VERIFICATION_LOG_PATH;
     const today = getTodayLogKey();
@@ -91,6 +155,8 @@ function ensureDailyPaymentVerificationLog() {
     if (!logPath) {
         return { date: today, transactions: [] };
     }
+
+    ensureParentDirForFile(logPath);
 
     let data = null;
     if (fs.existsSync(logPath)) {
@@ -116,43 +182,41 @@ function persistPaymentVerificationLog(logData) {
     const logPath = config.PAYMENT_VERIFICATION_LOG_PATH;
     if (!logPath) return;
 
+    ensureParentDirForFile(logPath);
     fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), 'utf8');
-}
-
-function parseMiniStatementCreditTransactions(statementText) {
-    if (!statementText || typeof statementText !== 'string') return [];
-
-    const lines = statementText.split(/\r?\n/);
-    const credits = [];
-    const pattern = /^(\d{2}\/\d{2}\/\d{4})\s*:\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*(CR|DR)\b/i;
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        const match = line.match(pattern);
-        if (!match) continue;
-
-        const date = match[1];
-        const amount = Number(match[2].replace(/,/g, ''));
-        const type = match[3].toUpperCase();
-        if (!Number.isFinite(amount) || type !== 'CR') continue;
-
-        credits.push({
-            date,
-            amount,
-            type,
-            rawLine: line,
-            normalizedLine: normalizeStatementLine(line),
-        });
-    }
-
-    return credits;
 }
 
 function looksLikeMiniStatementMessage(text) {
     if (!text || typeof text !== 'string') return false;
-    if (!/available balance in a\/c/i.test(text)) return false;
-    if (!/\d{2}\/\d{2}\/\d{4}\s*:/.test(text)) return false;
+
+    const normalized = normalizeSbiMessageText(text);
+    if (!/available balance in a\/c/i.test(normalized)) return false;
+    if (!/\d{2}\/\d{2}\/\d{4}\s*:/.test(normalized)) return false;
     return true;
+}
+
+function looksLikeBalanceMessage(text) {
+    if (!text || typeof text !== 'string') return false;
+
+    const normalized = normalizeSbiMessageText(text);
+    if (!/available balance in a\/c/i.test(normalized)) return false;
+    if (!/rs\.?\s*[0-9,]+(?:\.[0-9]{1,2})?\s*(?:cr|dr)?\b/i.test(normalized)) return false;
+    return true;
+}
+
+function parseAvailableBalance(text) {
+    if (!text || typeof text !== 'string') return null;
+
+    const normalized = normalizeSbiMessageText(text);
+    const contextMatch = normalized.match(
+        /available balance in a\/c[^:]*:\s*rs\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*(?:cr|dr)?\b/i
+    );
+    const fallbackMatch = normalized.match(/rs\.?\s*([0-9,]+(?:\.[0-9]{1,2})?)\s*(?:cr|dr)?\b/i);
+    const match = contextMatch || fallbackMatch;
+    if (!match) return null;
+
+    const amount = Number(match[1].replace(/,/g, ''));
+    return Number.isFinite(amount) ? amount : null;
 }
 
 function waitForIncomingMessage(filterFn, timeoutMs) {
@@ -194,105 +258,82 @@ function waitForIncomingMessage(filterFn, timeoutMs) {
     });
 }
 
-async function closeSbiConversationForNextQuery() {
-    if (!globalClient) return;
-
-    const promptPattern = /would you like to view more transactions\??/i;
-    let shouldSendNo = false;
-
-    try {
-        await waitForIncomingMessage(
-            (incomingMsg) =>
-                incomingMsg.from === config.SBI_BANKING_CHAT_ID &&
-                promptPattern.test((incomingMsg.body || '').trim()),
-            config.PAYMENT_VERIFICATION_FOLLOWUP_TIMEOUT_MS
-        );
-        shouldSendNo = true;
-    } catch (_) {
-        // If prompt wasn't observed in the window, still send "No" once as a best-effort reset.
-        shouldSendNo = true;
-    }
-
-    if (!shouldSendNo) return;
-
-    try {
-        await globalClient.sendMessage(config.SBI_BANKING_CHAT_ID, 'No');
-    } catch (err) {
-        console.error('❌ [Handler] Failed to send "No" to SBI bot:', err.message);
-    }
-}
-
-async function fetchMiniStatementFromSbi() {
+async function fetchAccountBalanceFromSbi() {
     if (!globalClient) throw new Error('WhatsApp client is not ready.');
 
-    await globalClient.sendMessage(config.SBI_BANKING_CHAT_ID, config.SBI_MINI_STATEMENT_COMMAND);
-    console.log('🏦 [Handler] Requested mini statement from SBI WhatsApp banking.');
-
-    const statementMsg = await waitForIncomingMessage(
-        (incomingMsg) =>
-            incomingMsg.from === config.SBI_BANKING_CHAT_ID &&
-            looksLikeMiniStatementMessage((incomingMsg.body || '').trim()),
+    const balanceWaitPromise = waitForIncomingMessage(
+        (incomingMsg) => {
+            const incomingBody = (incomingMsg.body || '').trim();
+            if (!looksLikeBalanceMessage(incomingBody)) return false;
+            return isSbiBankingSender(incomingMsg.from, incomingBody, { allowHeuristic: true });
+        },
         config.PAYMENT_VERIFICATION_TIMEOUT_MS
     );
 
-    await closeSbiConversationForNextQuery();
+    const balanceCommand = config.SBI_BALANCE_COMMAND || 'Get Balance💸';
+    await globalClient.sendMessage(config.SBI_BANKING_CHAT_ID, balanceCommand);
+    console.log('🏦 [Handler] Requested account balance from SBI WhatsApp banking.');
 
-    return (statementMsg.body || '').trim();
+    const balanceMsg = await balanceWaitPromise;
+
+    rememberSbiSender(balanceMsg?.from);
+    const availableBalance = parseAvailableBalance((balanceMsg.body || '').trim());
+    if (!Number.isFinite(availableBalance)) {
+        throw new Error('Unable to parse account balance from SBI response.');
+    }
+
+    return availableBalance;
 }
 
-function evaluateStatementForPayment(statementText, currentPrice, logData) {
-    const todayStatementDate = getTodayStatementDateKey();
-    const statementCredits = parseMiniStatementCreditTransactions(statementText)
-        .filter((entry) => entry.date === todayStatementDate);
-
-    const loggedTransactions = Array.isArray(logData?.transactions) ? logData.transactions : [];
-    const usedCreditIndexes = new Set();
-
-    for (const logged of loggedTransactions) {
-        const loggedDate = String(logged?.date || '');
-        const loggedAmount = Number(logged?.amount);
-
-        const matchedIndex = statementCredits.findIndex((entry, index) => {
-            if (usedCreditIndexes.has(index)) return false;
-            if (entry.date !== loggedDate) return false;
-            if (Math.abs(entry.amount - loggedAmount) > 0.009) return false;
-            return true;
-        });
-
-        if (matchedIndex >= 0) {
-            usedCreditIndexes.add(matchedIndex);
-        }
+async function initializeSbiBalanceBaseline() {
+    try {
+        sbiKnownBalance = await fetchAccountBalanceFromSbi();
+        console.log('🏦 [Handler] SBI balance baseline initialized.');
+    } catch (err) {
+        sbiKnownBalance = null;
+        console.error('❌ [Handler] Failed to initialize SBI balance baseline:', err.message);
     }
-
-    const newCredits = statementCredits.filter((_, index) => !usedCreditIndexes.has(index));
-    if (newCredits.length === 0) {
-        return { ok: false, reason: 'no_new_credit' };
-    }
-
-    const matchingCredit = newCredits.find((entry) => entry.amount >= currentPrice);
-    if (!matchingCredit) {
-        const bestAttempt = newCredits.reduce((best, entry) => Math.max(best, entry.amount), 0);
-        return { ok: false, reason: 'insufficient_amount', receivedAmount: bestAttempt };
-    }
-
-    return { ok: true, transaction: matchingCredit };
 }
 
-function appendVerifiedPaymentToLog(logData, transaction, buyerName, expectedPrice) {
-    if (!logData || !transaction) return;
+function clearCurrentBuyerPaidAmount() {
+    currentBuyerPaidAmount = 0;
+}
+
+function appendVerifiedPaymentToLog(logData, verificationEntry) {
+    if (!logData) return;
 
     if (!Array.isArray(logData.transactions)) {
         logData.transactions = [];
     }
 
     logData.transactions.push({
-        date: transaction.date,
-        amount: transaction.amount,
-        rawLine: transaction.rawLine,
+        buyerName: verificationEntry.buyerName,
+        meal: getCurrentMeal(),
+        expectedPrice: Number(verificationEntry.expectedPrice),
+        receivedAmount: Number(verificationEntry.receivedAmount),
+        creditedThisCheck: Number(verificationEntry.creditedThisCheck),
+        verifiedAt: new Date().toISOString(),
+    });
+    persistPaymentVerificationLog(logData);
+}
+
+function appendPartialPaymentAttemptToLog(logData, buyerName, expectedPrice, receivedAmount, creditedThisCheck) {
+    if (!logData) return;
+    if (!Array.isArray(logData.partialAttempts)) {
+        logData.partialAttempts = [];
+    }
+
+    const expected = Number(expectedPrice);
+    const received = Number(receivedAmount);
+    const remainingAmount = Math.max(expected - received, 0);
+    logData.partialAttempts.push({
         buyerName,
         meal: getCurrentMeal(),
-        expectedPrice,
-        verifiedAt: new Date().toISOString(),
+        expectedPrice: expected,
+        receivedAmount: received,
+        creditedThisCheck: Number(creditedThisCheck),
+        remainingAmount,
+        checkedAt: new Date().toISOString(),
     });
 
     persistPaymentVerificationLog(logData);
@@ -336,15 +377,35 @@ async function verifyPaymentAndCompleteSale(chat, buyerName, currentPrice) {
         await chat.sendMessage(config.paymentVerificationInProgressMessage());
 
         const logData = ensureDailyPaymentVerificationLog();
-        const statementText = await fetchMiniStatementFromSbi();
-        const verification = evaluateStatementForPayment(statementText, currentPrice, logData);
+        if (!Number.isFinite(sbiKnownBalance)) {
+            sbiKnownBalance = await fetchAccountBalanceFromSbi();
+            currentBuyerPaidAmount = 0;
+        }
 
-        if (!verification.ok) {
-            if (verification.reason === 'insufficient_amount') {
-                setPendingScreenshotPaymentProof(currentBuyer?.id, 'insufficient_amount');
-                await chat.sendMessage(config.paymentVerificationInsufficientAmountMessage(currentPrice, verification.receivedAmount));
+        const latestBalance = await fetchAccountBalanceFromSbi();
+        const balanceDelta = latestBalance - sbiKnownBalance;
+        sbiKnownBalance = latestBalance;
+
+        const creditedThisCheck = balanceDelta > 0 ? balanceDelta : 0;
+        if (creditedThisCheck > 0) {
+            currentBuyerPaidAmount += creditedThisCheck;
+        }
+
+        if (currentBuyerPaidAmount + 0.009 < currentPrice) {
+            setPendingScreenshotPaymentProof(currentBuyer?.id, 'insufficient_amount');
+            appendPartialPaymentAttemptToLog(
+                logData,
+                buyerName,
+                currentPrice,
+                currentBuyerPaidAmount,
+                creditedThisCheck
+            );
+
+            if (currentBuyerPaidAmount > 0) {
+                await chat.sendMessage(
+                    config.paymentVerificationInsufficientAmountMessage(currentPrice, currentBuyerPaidAmount)
+                );
             } else {
-                setPendingScreenshotPaymentProof(currentBuyer?.id, 'no_new_credit');
                 await chat.sendMessage(config.paymentVerificationNoNewCreditMessage());
             }
 
@@ -355,8 +416,14 @@ async function verifyPaymentAndCompleteSale(chat, buyerName, currentPrice) {
         }
 
         clearPendingScreenshotPaymentProof();
-        appendVerifiedPaymentToLog(logData, verification.transaction, buyerName, currentPrice);
-        console.log(`💳 [Handler] Verified payment via SBI mini statement: ₹${verification.transaction.amount.toFixed(2)}.`);
+        appendVerifiedPaymentToLog(logData, {
+            buyerName,
+            expectedPrice: currentPrice,
+            receivedAmount: currentBuyerPaidAmount,
+            creditedThisCheck,
+        });
+        console.log('💳 [Handler] Verified payment via SBI balance increase.');
+        clearCurrentBuyerPaidAmount();
 
         await completeSale(chat, buyerName, {
             confirmedPayment: true,
@@ -381,6 +448,7 @@ async function verifyPaymentAndCompleteSale(chat, buyerName, currentPrice) {
 async function handleMessage(msg, client) {
     try {
         const senderId = msg.from;
+        const body = (msg.body || '').trim();
 
         // ── Filter: only respond to personal DMs ────────────────
         if (senderId.endsWith('@broadcast') || senderId.endsWith('@g.us')) {
@@ -388,11 +456,11 @@ async function handleMessage(msg, client) {
         }
 
         // Ignore SBI banking chat traffic from normal buyer handling flow.
-        if (isSbiBankingSender(senderId)) return;
+        // Heuristic matching is enabled here to handle SBI sender-id variations.
+        if (isSbiBankingSender(senderId, body, { allowHeuristic: true })) return;
 
         const contact = await msg.getContact();
         const senderName = contact.pushname || contact.name || senderId;
-        const body = (msg.body || '').trim();
         const chat = await msg.getChat();
 
         const me = client.info.wid._serialized;
@@ -535,6 +603,7 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
 
 async function assignBuyer(chat, senderId, senderName) {
     clearPendingScreenshotPaymentProof();
+    clearCurrentBuyerPaidAmount();
     currentBuyer = {
         id: senderId,
         name: senderName,
@@ -549,7 +618,8 @@ async function assignBuyer(chat, senderId, senderName) {
         console.log('📤 [Handler] UPI ID sent.');
 
         const price = getCurrentPrice();
-        await chat.sendMessage(config.payViaPhoneMessage(price, config.PHONE_NUMBER));
+        const safePrice = Number.isFinite(price) && price > 0 ? price : config.DEFAULT_PRICE;
+        await chat.sendMessage(config.payViaPhoneMessage(safePrice, config.PHONE_NUMBER));
 
         await chat.sendMessage(config.paymentInstructionMessage(config.PAYMENT_VERIFICATION_ENABLED));
         console.log('📤 [Handler] Payment instruction sent.');
@@ -569,7 +639,26 @@ async function assignBuyer(chat, senderId, senderName) {
 function scheduleNextBuyer(delayMs) {
     if (queueTimer) return; // Wait until current timer finishes
 
-    console.log(`⏱️  [Timer] Checking queue in ${Math.round(delayMs / 1000)}s...`);
+    const safeDelayMs = Math.max(0, Number(delayMs) || 0);
+    console.log(`⏱️  [Timer] Checking queue in ${Math.round(safeDelayMs / 1000)}s...`);
+
+    const warningDelayMs = safeDelayMs - config.BUYER_TIMEOUT_WARNING_MS;
+    const warningBuyerId = currentBuyer?.id || null;
+    if (warningDelayMs > 0 && currentBuyer?.chat && buyerQueue.length > 0) {
+        queueWarningTimer = setTimeout(async () => {
+            queueWarningTimer = null;
+            if (sold || !currentBuyer) return;
+            if (!warningBuyerId || currentBuyer.id !== warningBuyerId) return;
+            if (buyerQueue.length === 0) return;
+
+            try {
+                await currentBuyer.chat.sendMessage(config.timeoutWarningMessage());
+                console.log(`⏳ [Timer] Sent timeout warning to ${currentBuyer.name}.`);
+            } catch (err) {
+                console.error('❌ [Timer] Error sending timeout warning:', err.message);
+            }
+        }, warningDelayMs);
+    }
 
     queueTimer = setTimeout(async () => {
         queueTimer = null;
@@ -577,7 +666,7 @@ function scheduleNextBuyer(delayMs) {
 
         console.log(`⏱️  [Timer] ${currentBuyer.name} ran out of time. Checking queue.`);
         await moveNextBuyer();
-    }, delayMs);
+    }, safeDelayMs);
 }
 
 async function moveNextBuyer() {
@@ -595,6 +684,7 @@ async function moveNextBuyer() {
 
 function clearAllTimers() {
     if (queueTimer) { clearTimeout(queueTimer); queueTimer = null; }
+    if (queueWarningTimer) { clearTimeout(queueWarningTimer); queueWarningTimer = null; }
 }
 
 function getMessageKey(msg) {
@@ -822,6 +912,7 @@ async function removeAllTrackedReactions() {
 function releaseBuyer() {
     clearAllTimers();
     clearPendingScreenshotPaymentProof();
+    clearCurrentBuyerPaidAmount();
     currentBuyer = null;
     console.log('🔄 [Handler] Buyer reservation released.');
 }
@@ -896,6 +987,7 @@ async function completeSale(chat, buyerName, options = {}) {
     reactOwnGroupMessages = true;
     allowTestingRevert = allowBuyerTestingRevert;
     clearPendingScreenshotPaymentProof();
+    clearCurrentBuyerPaidAmount();
     reactedGroupMessages.clear();
     stats.soldPrice = getCurrentPrice();
     stats.buyerName = buyerName;
@@ -936,6 +1028,7 @@ async function revertSale(chat, buyerName) {
     allowTestingRevert = true;
     paymentVerificationInProgress = false;
     clearPendingScreenshotPaymentProof();
+    clearCurrentBuyerPaidAmount();
     await removeAllTrackedReactions();
     stats.soldPrice = null;
     stats.buyerName = null;
@@ -959,6 +1052,7 @@ function handleUnsoldStop() {
     allowTestingRevert = false;
     paymentVerificationInProgress = false;
     clearPendingScreenshotPaymentProof();
+    clearCurrentBuyerPaidAmount();
     reactedGroupMessages.clear();
     clearAllTimers();
     printReport();
@@ -1010,6 +1104,8 @@ function setClient(client) {
     } catch (err) {
         console.error('❌ [Handler] Failed to initialize daily payment verification log:', err.message);
     }
+
+    void initializeSbiBalanceBaseline();
 }
 
 module.exports = { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient };

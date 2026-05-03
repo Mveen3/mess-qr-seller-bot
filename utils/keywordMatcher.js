@@ -1,22 +1,40 @@
 'use strict';
 
-const { BUYER_KEYWORDS, DONE_KEYWORDS } = require('./settings');
+const { BUYER_KEYWORDS, DONE_KEYWORDS } = require('./config');
 
 function isBuyerKeyword(text) {
-    const lower = text.toLowerCase();
+    const lower = normalizeText(text);
+    if (!lower) return false;
+
     return BUYER_KEYWORDS.some((kw) => {
-        const regex = new RegExp(`\\b${escapeRegex(kw)}\\b`, 'i');
+        const keyword = normalizeText(kw);
+        if (!keyword) return false;
+
+        // Punctuation-only triggers like "?" cannot be matched with word boundaries.
+        if (!/[a-z0-9]/i.test(keyword)) {
+            return lower.includes(keyword);
+        }
+
+        const regex = new RegExp(`(^|[^a-z0-9])${escapeRegex(keyword)}([^a-z0-9]|$)`, 'i');
         return regex.test(lower);
     });
 }
 
 function isDoneKeyword(text) {
-    const lower = text.toLowerCase();
-    return DONE_KEYWORDS.some((kw) => lower.includes(kw));
+    const lower = normalizeText(text);
+    if (!lower) return false;
+    return DONE_KEYWORDS.some((kw) => {
+        const keyword = normalizeText(kw);
+        return keyword ? lower.includes(keyword) : false;
+    });
 }
 
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeText(value) {
+    return typeof value === 'string' ? value.toLowerCase().trim() : '';
 }
 
 module.exports = { isBuyerKeyword, isDoneKeyword };

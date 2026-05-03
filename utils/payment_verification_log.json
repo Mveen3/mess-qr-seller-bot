@@ -1,0 +1,29 @@
+{
+  "date": "2026-05-04",
+  "transactions": [
+    {
+      "buyerName": "NA",
+      "meal": "breakfast",
+      "expectedPrice": 30,
+      "receivedAmount": 60,
+      "creditedThisCheck": 55,
+      "verifiedAt": "2026-05-03T21:49:53.152Z"
+    },
+    {
+      "buyerName": "NA",
+      "meal": "breakfast",
+      "expectedPrice": 30,
+      "receivedAmount": 30,
+      "creditedThisCheck": 20,
+      "verifiedAt": "2026-05-03T21:51:54.327Z"
+    },
+    {
+      "buyerName": "NA",
+      "meal": "breakfast",
+      "expectedPrice": 30,
+      "receivedAmount": 30,
+      "creditedThisCheck": 10,
+      "verifiedAt": "2026-05-03T22:10:21.243Z"
+    }
+  ]
+}
