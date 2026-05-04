@@ -63,7 +63,8 @@ client.on('ready', async () => {
         setClient(client);
 
         const chats = await client.getChats();
-        targetChat = chats.find((c) => c.isGroup && c.name === config.GROUP_NAME);
+        const targetGroupName = config.GROUP_NAME ? config.GROUP_NAME.trim() : '';
+        targetChat = chats.find((c) => c.isGroup && c.name && c.name.trim() === targetGroupName);
 
         if (!targetChat) {
             console.error(`❌ Group "${config.GROUP_NAME}" not found! Available groups:`);
@@ -77,7 +78,7 @@ client.on('ready', async () => {
         startScheduler(
             async (text) => {
                 try {
-                    await targetChat.sendMessage(text);
+                    await client.sendMessage(targetChat.id._serialized, text);
                 } catch (err) {
                     console.error('❌ [Main] Failed to send scheduled message:', err.message);
                 }

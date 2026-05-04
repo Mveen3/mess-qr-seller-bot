@@ -4,7 +4,7 @@
 # Use \n for line breaks inside message templates.
 
 # ─── Target Group ───────────────────────────────────────────────
-GROUP_NAME=Mess Buy Sell @ IIITH - 2
+GROUP_NAME=Temp
 
 # ─── Seller Info ────────────────────────────────────────────────
 UPI_ID=mveen@upi
@@ -12,7 +12,7 @@ PHONE_NUMBER=8948966418
 QR_IMAGE_PATH=utils/qr.png
 
 # ─── Meal Timings ───────────────────────────────────────────────
-MEAL_BREAKFAST_START=07:30
+MEAL_BREAKFAST_START=00:54
 MEAL_BREAKFAST_END=09:30
 MEAL_LUNCH_START=12:30
 MEAL_LUNCH_END=14:30
