@@ -9,5 +9,16 @@
       "creditedThisCheck": 25,
       "verifiedAt": "2026-05-04T19:29:33.771Z"
     }
+  ],
+  "partialAttempts": [
+    {
+      "buyerName": "NA",
+      "meal": "breakfast",
+      "expectedPrice": 30,
+      "receivedAmount": 0,
+      "creditedThisCheck": 0,
+      "remainingAmount": 30,
+      "checkedAt": "2026-05-04T19:34:38.032Z"
+    }
   ]
 }
