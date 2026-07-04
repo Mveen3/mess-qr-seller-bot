@@ -1,6 +1,6 @@
 # Mess QR Selling Bot
 
-WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM buyer handling, queue management, and optional SBI balance-based payment verification.
+WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM buyer handling, and queue management.
 
 ## Features
 
@@ -9,23 +9,21 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
 3. Buyer intent detection from DM keywords.
 4. Buyer queue with inactivity timeout and warning message.
 5. Optional negotiation mode with configurable margin.
-6. Optional payment verification through SBI WhatsApp Banking balance checks.
-7. Screenshot fallback flow if auto-verification is delayed.
+6. Auto-complete sale on WhatsApp Pay signal, payment screenshot, or `DONE` keyword.
+7. ✅ reactions on group sell messages when sold; removed on `TESTING` revert.
 8. QR delivery + sale confirmation + report after successful sale.
 9. `TESTING` revert for the actual buyer to mark the QR unsold and restart scheduler.
 
-## How Payment Verification Works
+## How It Works
 
-When verification is enabled:
-
-1. Bot asks SBI WhatsApp Banking for balance using `SBI_BALANCE_COMMAND`.
-2. Bot parses messages like `Available Balance in A/c ... Rs. *1474.13 CR*` (multiline and formatted text supported).
-3. Verification uses balance increase (`latestBalance - knownBalance`) to detect credited payment.
-4. If credited amount is below expected price, buyer is asked to pay the remaining amount.
-5. If no credit is detected, buyer is asked to retry with `DONE` or share screenshot.
-6. If buyer shares screenshot after insufficient/no-credit prompt, payment can be accepted.
-
-Verified and partial attempts are written to `PAYMENT_VERIFICATION_LOG_PATH`.
+1. Bot sends sell messages in the target group at scheduled intervals with dropping prices.
+2. When a buyer DMs a keyword like "buy", "want", etc., the bot assigns them and sends UPI/phone details.
+3. Sale completes automatically when the buyer:
+   - Sends payment via **WhatsApp Pay** (detected instantly).
+   - Sends a **photo/screenshot** (assumed payment proof).
+   - Replies with **DONE** or any payment confirmation keyword.
+4. On sale completion, the bot sends the QR image, confirms the sale, and adds ✅ reactions to group sell messages.
+5. If the buyer replies with **TESTING**, the sale is reverted, ✅ reactions are removed, and the scheduler restarts.
 
 ## Project Structure
 
@@ -33,13 +31,13 @@ Verified and partial attempts are written to `PAYMENT_VERIFICATION_LOG_PATH`.
 - `Setting.txt`: user-editable runtime configuration.
 - `utils/config.js`: settings parser + defaults + message templates.
 - `utils/priceScheduler.js`: timed posting and auto-stop logic.
-- `utils/messageHandler.js`: DM flow, queueing, payment verification, sale completion.
+- `utils/messageHandler.js`: DM flow, queueing, sale completion.
 - `utils/keywordMatcher.js`: buyer/done intent matching.
 - `utils/priceParser.js`: negotiation number extraction.
 
 ## Setup
 
-1. Install Node.js 16 or newer.
+1. Install Node.js 18 or newer.
 2. Install dependencies:
 
 ```bash
@@ -47,7 +45,7 @@ npm install
 ```
 
 3. Put your QR image at `utils/qr.png` (or change `QR_IMAGE_PATH` in `Setting.txt`).
-4. Update key values in `Setting.txt`: `GROUP_NAME`, `UPI_ID`, `PHONE_NUMBER`, `MESS_NAMES`, `DEFAULT_PRICE`, and `SBI_BANKING_CHAT_ID` (if verification is enabled).
+4. Update key values in `Setting.txt`: `GROUP_NAME`, `UPI_ID`, `PHONE_NUMBER`, `MESS_NAMES`, `DEFAULT_PRICE`.
 
 ## Run
 
@@ -63,8 +61,6 @@ At startup:
 
 ## Important Config Flags
 
-- `PAYMENT_VERIFICATION_ENABLED=true|false`
-- `PAYMENT_VERIFICATION_TIMEOUT_MS=45000`
 - `BUYER_INACTIVITY_MS=90000`
 - `BUYER_TIMEOUT_WARNING_MS=30000`
 - `ENABLE_NEGOTIATION=true|false`

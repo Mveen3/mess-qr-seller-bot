@@ -79,7 +79,6 @@ async function showMenu() {
         console.log(`\n✅ Using default settings — ${config.DEFAULT_MESS} ${meal.charAt(0).toUpperCase() + meal.slice(1)} @ ₹${config.DEFAULT_PRICE}\n`);
         return {
             ENABLE_NEGOTIATION: config.ENABLE_NEGOTIATION,
-            PAYMENT_VERIFICATION_ENABLED: config.PAYMENT_VERIFICATION_ENABLED,
             DEFAULT_PRICE: config.DEFAULT_PRICE,
             _meal: meal,
             _mess: config.DEFAULT_MESS,
@@ -90,25 +89,15 @@ async function showMenu() {
     // ─── Custom settings ────────────────────────────────────────
     console.log('\n📝 Custom settings (press Enter to use default)\n');
 
-    // 1. Negotiation
-    const negoInput = await ask(rl, `  Enable negotiation? [0=No / 1=Yes] (default: 0): `);
-    const enableNegotiation = negoInput === '1';
-
-    // 2. Payment verification
-    const paymentVerifyDefault = config.PAYMENT_VERIFICATION_ENABLED ? '1' : '0';
-    const paymentVerifyInput = await ask(
-        rl,
-        `  Enable payment verification? [0=No / 1=Yes] (default: ${paymentVerifyDefault}): `
-    );
-    const enablePaymentVerification = paymentVerifyInput === ''
-        ? config.PAYMENT_VERIFICATION_ENABLED
-        : paymentVerifyInput === '1';
-
-    // 3. Starting price
+    // 1. Starting price
     const priceInput = await ask(rl, `  Starting price? (default: ${config.DEFAULT_PRICE}): `);
     const price = parseIntegerOrDefault(priceInput, config.DEFAULT_PRICE, { min: 1, max: 500 });
 
-    // 4. Meal type
+    // 2. Negotiation
+    const negoInput = await ask(rl, `  Enable negotiation? [0=No / 1=Yes] (default: 0): `);
+    const enableNegotiation = negoInput === '1';
+
+    // 3. Meal type
     const detectedMeal = detectMeal();
     const mealOptions = ['breakfast', 'lunch', 'dinner'];
     const detectedMealIndex = Math.max(0, mealOptions.indexOf(detectedMeal));
@@ -118,7 +107,7 @@ async function showMenu() {
     );
     const meal = parseIndexedChoice(mealInput, mealOptions, detectedMealIndex);
 
-    // 5. Mess name
+    // 4. Mess name
     const messOptions = config.MESS_NAMES;
     const defaultMessIndex = Math.max(0, messOptions.findIndex((name) => name === config.DEFAULT_MESS));
     const messInput = await ask(
@@ -127,7 +116,7 @@ async function showMenu() {
     );
     const mess = parseIndexedChoice(messInput, messOptions, defaultMessIndex);
 
-    // 6. Number of messages
+    // 5. Number of messages
     const numInput = await ask(rl, `  Number of messages to send? (default: ${config.DEFAULT_NUM_MESSAGES}): `);
     const numMessages = parseIntegerOrDefault(numInput, config.DEFAULT_NUM_MESSAGES, { min: 1, max: 24 });
 
@@ -138,7 +127,6 @@ async function showMenu() {
   ✅ Custom settings applied          
 ──────────────────────────────────────
   Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${safeRepeat(21 - (enableNegotiation ? 3 : 2))}
-  Verify Pay  : ${enablePaymentVerification ? 'Yes' : 'No'}${safeRepeat(21 - (enablePaymentVerification ? 3 : 2))}
   Price       : ₹${price}${safeRepeat(20 - String(price).length)}
   Meal        : ${meal.charAt(0).toUpperCase() + meal.slice(1)}${safeRepeat(22 - meal.length)}
   Mess        : ${mess}${safeRepeat(22 - mess.length)}
@@ -148,7 +136,6 @@ async function showMenu() {
 
     return {
         ENABLE_NEGOTIATION: enableNegotiation,
-        PAYMENT_VERIFICATION_ENABLED: enablePaymentVerification,
         DEFAULT_PRICE: price,
         _meal: meal,
         _mess: mess,

@@ -33,11 +33,21 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--disable-gpu',
+            '--disable-extensions',
+            '--disable-default-apps',
+            '--disable-translate',
+            '--disable-sync',
+            '--no-zygote',
+            '--single-process',
         ],
+    },
+    // Cache WhatsApp Web version to avoid re-downloading on every startup
+    webVersionCache: {
+        type: 'local',
     },
 });
 
-let targetChat = null;
+let targetChats = [];
 
 // ─── QR Event ───────────────────────────────────────────────
 client.on('qr', (qr) => {
@@ -63,24 +73,29 @@ client.on('ready', async () => {
         setClient(client);
 
         const chats = await client.getChats();
-        const targetGroupName = config.GROUP_NAME ? config.GROUP_NAME.trim() : '';
-        targetChat = chats.find((c) => c.isGroup && c.name && c.name.trim() === targetGroupName);
+        const configuredGroups = config.GROUP_NAMES || [];
+        targetChats = chats.filter((c) => c.isGroup && c.name && configuredGroups.includes(c.name.trim()));
 
-        if (!targetChat) {
-            console.error(`❌ Group "${config.GROUP_NAME}" not found! Available groups:`);
+        if (targetChats.length === 0) {
+            console.error(`❌ No target groups found from your configuration: ${configuredGroups.join(', ')}`);
+            console.error(`   Available groups you are in:`);
             chats.filter((c) => c.isGroup).forEach((c) => console.log(`   • ${c.name}`));
             console.error('\nPlease update GROUP_NAME in Setting.txt and restart.');
             return;
         }
 
-        console.log(`🎯 Target group found: "${targetChat.name}" (${targetChat.id._serialized})\n`);
+        console.log(`🎯 Target groups found (${targetChats.length}):`);
+        targetChats.forEach((c) => console.log(`   • "${c.name}" (${c.id._serialized})`));
+        console.log('');
 
         startScheduler(
             async (text) => {
-                try {
-                    await client.sendMessage(targetChat.id._serialized, text);
-                } catch (err) {
-                    console.error('❌ [Main] Failed to send scheduled message:', err.message);
+                for (const chat of targetChats) {
+                    try {
+                        await client.sendMessage(chat.id._serialized, text);
+                    } catch (err) {
+                        console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
+                    }
                 }
             },
             async () => {
@@ -157,7 +172,6 @@ process.on('SIGINT', async () => {
     // Apply CLI overrides to global config
     applyOverrides({
         ENABLE_NEGOTIATION: runOpts.ENABLE_NEGOTIATION,
-        PAYMENT_VERIFICATION_ENABLED: runOpts.PAYMENT_VERIFICATION_ENABLED,
         DEFAULT_PRICE: runOpts.DEFAULT_PRICE,
     });
 

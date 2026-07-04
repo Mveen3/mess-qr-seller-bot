@@ -7,7 +7,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const SETTINGS_FILE_PATH = path.resolve(PROJECT_ROOT, 'Setting.txt');
 
 const DEFAULTS = {
-    GROUP_NAME: 'Mess Buy Sell @ IIITH - 2',
+    GROUP_NAMES: ['Mess Buy Sell @ IIITH - 2'],
     UPI_ID: 'mveen@upi',
     PHONE_NUMBER: '8948966418',
     QR_IMAGE_PATH: 'utils/qr.png',
@@ -28,14 +28,6 @@ const DEFAULTS = {
 
     ENABLE_NEGOTIATION: false,
     NEGOTIATION_MARGIN: 5,
-
-    PAYMENT_VERIFICATION_ENABLED: true,
-    SBI_BANKING_CHAT_ID: '919022690226@c.us',
-    SBI_BALANCE_COMMAND: 'Get Balance💸',
-    SBI_MINI_STATEMENT_COMMAND: 'Get Mini Statement📄',
-    PAYMENT_VERIFICATION_TIMEOUT_MS: 45 * 1000,
-    PAYMENT_VERIFICATION_FOLLOWUP_TIMEOUT_MS: 12 * 1000,
-    PAYMENT_VERIFICATION_LOG_PATH: 'utils/payment_verification_log.json',
 
     BUYER_INACTIVITY_MS: 90 * 1000,
     BUYER_TIMEOUT_WARNING_MS: 30 * 1000,
@@ -61,21 +53,8 @@ const DEFAULTS = {
     ],
 
     SELL_MESSAGE_TEMPLATE: 'Sell {messName} {mealTypeCapitalized} @{price}',
-    PAYMENT_INSTRUCTION_MESSAGE_VERIFY:
-        '_This transaction is handled by an automated system. Please reply with_ *DONE* _so that system can verify your payment and send the QR._',
-    PAYMENT_INSTRUCTION_MESSAGE_NO_VERIFY:
+    PAYMENT_INSTRUCTION_MESSAGE:
         '_This transaction is handled by an automated system. Please reply with_ *DONE* _so that system can send the QR._',
-    PAYMENT_VERIFICATION_IN_PROGRESS_MESSAGE: 'Please wait while the system verifies your payment.',
-    PAYMENT_VERIFICATION_IN_PROGRESS_ALREADY_MESSAGE:
-        'Payment verification is already in progress. Please wait a few seconds.',
-    PAYMENT_VERIFICATION_NO_NEW_CREDIT_MESSAGE:
-        'I could not detect your payment in the latest bank statement yet. If you have already paid, please share a payment screenshot. Otherwise, please wait a moment and reply with *DONE* again.',
-    PAYMENT_VERIFICATION_INSUFFICIENT_AMOUNT_MESSAGE:
-        'I detected ₹{receivedAmount} credited, but the current price is ₹{expectedAmount}. Remaining amount is ₹{remainingAmount}. Please pay the remaining amount and reply with *DONE* again. If you have already paid the full amount, please share a payment screenshot.',
-    PAYMENT_VERIFICATION_SYSTEM_ERROR_MESSAGE:
-        'I could not verify payment right now due to a temporary issue. Please try again by sending *DONE* in a minute.',
-    PAYMENT_VERIFICATION_SCREENSHOT_ACCEPTED_MESSAGE:
-        'Apologies for the delay in verification. I have accepted your payment screenshot and I am sending the QR now.',
     SOLD_MESSAGE: 'Sorry, already sold!',
     UNRECOGNIZED_MESSAGE:
         'Could not understand your message. Please reply with _*DONE*_ after completing the payment.',
@@ -85,8 +64,6 @@ const DEFAULTS = {
         "Moved to the next buyer. If you still want it, reply with _*WANTS*_ and I'll notify you if the QR is still available.",
     SALE_CONFIRM_MESSAGE:
         'Thank you, {buyerName}.\\nEnjoy your {mealType}!\\n\\n_PS: If you were just testing the bot out of curiosity and didn\'t actually wants, please reply with_ *TESTING* _so the system can serve other buyers._',
-    SALE_CONFIRM_PAID_MESSAGE:
-        'Thank you, {buyerName}.\\nEnjoy your {mealType}!',
     TEST_REVERTED_MESSAGE: 'Got it! Thanks for letting me know!',
     NEGOTIATION_ACCEPTED_MESSAGE: '✅ Offer of ₹{price} accepted!',
     PAY_VIA_PHONE_MESSAGE: 'You can also pay ₹{price} on the same number ie {phone}',
@@ -178,7 +155,12 @@ function applyTemplate(template, variables) {
 const rawSettings = parseSettingsFile(SETTINGS_FILE_PATH);
 
 const settings = {
-    GROUP_NAME: getText(rawSettings, 'GROUP_NAME'),
+    GROUP_NAMES: (() => {
+        // Support both GROUP_NAMES and GROUP_NAME keys in Setting.txt
+        const raw = rawSettings.GROUP_NAMES || rawSettings.GROUP_NAME;
+        if (!raw || !raw.trim()) return [...DEFAULTS.GROUP_NAMES];
+        return raw.split(',').map((s) => s.trim()).filter(Boolean);
+    })(),
     UPI_ID: getText(rawSettings, 'UPI_ID'),
     PHONE_NUMBER: getText(rawSettings, 'PHONE_NUMBER'),
     QR_IMAGE_PATH: resolveProjectPath(rawSettings.QR_IMAGE_PATH, DEFAULTS.QR_IMAGE_PATH),
@@ -209,17 +191,6 @@ const settings = {
     ENABLE_NEGOTIATION: getBoolean(rawSettings, 'ENABLE_NEGOTIATION'),
     NEGOTIATION_MARGIN: getNumber(rawSettings, 'NEGOTIATION_MARGIN'),
 
-    PAYMENT_VERIFICATION_ENABLED: getBoolean(rawSettings, 'PAYMENT_VERIFICATION_ENABLED'),
-    SBI_BANKING_CHAT_ID: getText(rawSettings, 'SBI_BANKING_CHAT_ID'),
-    SBI_BALANCE_COMMAND: getText(rawSettings, 'SBI_BALANCE_COMMAND'),
-    SBI_MINI_STATEMENT_COMMAND: getText(rawSettings, 'SBI_MINI_STATEMENT_COMMAND'),
-    PAYMENT_VERIFICATION_TIMEOUT_MS: getNumber(rawSettings, 'PAYMENT_VERIFICATION_TIMEOUT_MS'),
-    PAYMENT_VERIFICATION_FOLLOWUP_TIMEOUT_MS: getNumber(rawSettings, 'PAYMENT_VERIFICATION_FOLLOWUP_TIMEOUT_MS'),
-    PAYMENT_VERIFICATION_LOG_PATH: resolveProjectPath(
-        rawSettings.PAYMENT_VERIFICATION_LOG_PATH,
-        DEFAULTS.PAYMENT_VERIFICATION_LOG_PATH
-    ),
-
     BUYER_INACTIVITY_MS: getNumber(rawSettings, 'BUYER_INACTIVITY_MS'),
     BUYER_TIMEOUT_WARNING_MS: getNumber(rawSettings, 'BUYER_TIMEOUT_WARNING_MS'),
 
@@ -235,32 +206,8 @@ settings.sellMessage = (messName, mealType, price) =>
         price,
     });
 
-settings.paymentInstructionMessage = (paymentVerificationEnabled = settings.PAYMENT_VERIFICATION_ENABLED) =>
-    paymentVerificationEnabled
-        ? getText(rawSettings, 'PAYMENT_INSTRUCTION_MESSAGE_VERIFY')
-        : getText(rawSettings, 'PAYMENT_INSTRUCTION_MESSAGE_NO_VERIFY');
-
-settings.paymentVerificationInProgressMessage = () =>
-    getText(rawSettings, 'PAYMENT_VERIFICATION_IN_PROGRESS_MESSAGE');
-
-settings.paymentVerificationInProgressAlreadyMessage = () =>
-    getText(rawSettings, 'PAYMENT_VERIFICATION_IN_PROGRESS_ALREADY_MESSAGE');
-
-settings.paymentVerificationNoNewCreditMessage = () =>
-    getText(rawSettings, 'PAYMENT_VERIFICATION_NO_NEW_CREDIT_MESSAGE');
-
-settings.paymentVerificationInsufficientAmountMessage = (expectedAmount, receivedAmount) =>
-    applyTemplate(getText(rawSettings, 'PAYMENT_VERIFICATION_INSUFFICIENT_AMOUNT_MESSAGE'), {
-        expectedAmount,
-        receivedAmount: Number(receivedAmount).toFixed(2),
-        remainingAmount: Math.max(Number(expectedAmount) - Number(receivedAmount), 0).toFixed(2),
-    });
-
-settings.paymentVerificationSystemErrorMessage = () =>
-    getText(rawSettings, 'PAYMENT_VERIFICATION_SYSTEM_ERROR_MESSAGE');
-
-settings.paymentVerificationScreenshotAcceptedMessage = () =>
-    getText(rawSettings, 'PAYMENT_VERIFICATION_SCREENSHOT_ACCEPTED_MESSAGE');
+settings.paymentInstructionMessage = () =>
+    getText(rawSettings, 'PAYMENT_INSTRUCTION_MESSAGE');
 
 settings.soldMessage = () => getText(rawSettings, 'SOLD_MESSAGE');
 settings.unrecognizedMessage = () => getText(rawSettings, 'UNRECOGNIZED_MESSAGE');
@@ -269,9 +216,6 @@ settings.timeoutFinalMessage = () => getText(rawSettings, 'TIMEOUT_FINAL_MESSAGE
 
 settings.saleConfirmMessage = (buyerName, mealType) =>
     applyTemplate(getText(rawSettings, 'SALE_CONFIRM_MESSAGE'), { buyerName, mealType });
-
-settings.saleConfirmPaidMessage = (buyerName, mealType) =>
-    applyTemplate(getText(rawSettings, 'SALE_CONFIRM_PAID_MESSAGE'), { buyerName, mealType });
 
 settings.testRevertedMessage = () => getText(rawSettings, 'TEST_REVERTED_MESSAGE');
 
