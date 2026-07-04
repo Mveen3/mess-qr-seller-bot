@@ -64,7 +64,54 @@ async function showMenu() {
 
     console.log(`
 ══════════════════════════════════════
-      🍽️  Mess QR Selling Bot         
+      🍽️  Mess QR Selling/Buying Bot         
+══════════════════════════════════════
+  [0]  Selling Mode (default)     
+  [1]  Buying Mode     
+══════════════════════════════════════
+`);
+
+    const modeChoice = await ask(rl, '👉 Choose Mode [0=Selling / 1=Buying] (default: 0): ');
+    const isBuying = modeChoice === '1';
+
+    if (isBuying) {
+        console.log('\n🛒 Buying Mode Setup\n');
+        
+        // Mess name
+        const messOptions = config.MESS_NAMES;
+        const defaultMessIndex = Math.max(0, messOptions.findIndex((name) => name === config.DEFAULT_MESS));
+        const messInput = await ask(
+            rl,
+            `  Which mess do you want? ${formatIndexedOptions(messOptions)} (default: ${defaultMessIndex}): `
+        );
+        const mess = parseIndexedChoice(messInput, messOptions, defaultMessIndex);
+
+        // Max price
+        const priceInput = await ask(rl, `  Max acceptable price? (default: 40): `);
+        const maxPrice = parseIntegerOrDefault(priceInput, 40, { min: 1, max: 500 });
+
+        rl.close();
+
+        console.log(`
+──────────────────────────────────────
+  🛒 Buying Mode active          
+──────────────────────────────────────
+  Mess        : ${mess}${safeRepeat(22 - mess.length)}
+  Max Price   : ₹${maxPrice}${safeRepeat(20 - String(maxPrice).length)}
+──────────────────────────────────────
+`);
+
+        return {
+            mode: 'BUYING',
+            _mess: mess,
+            _maxPrice: maxPrice,
+        };
+    }
+
+    // --- Selling Mode ---
+    console.log(`
+══════════════════════════════════════
+      🏷️  Selling Mode Setup         
 ══════════════════════════════════════
   [0]  Run with default settings     
   [1]  Run with custom settings      
@@ -78,6 +125,7 @@ async function showMenu() {
         const meal = detectMeal();
         console.log(`\n✅ Using default settings — ${config.DEFAULT_MESS} ${meal.charAt(0).toUpperCase() + meal.slice(1)} @ ₹${config.DEFAULT_PRICE}\n`);
         return {
+            mode: 'SELLING',
             ENABLE_NEGOTIATION: config.ENABLE_NEGOTIATION,
             DEFAULT_PRICE: config.DEFAULT_PRICE,
             _meal: meal,
@@ -135,6 +183,7 @@ async function showMenu() {
 `);
 
     return {
+        mode: 'SELLING',
         ENABLE_NEGOTIATION: enableNegotiation,
         DEFAULT_PRICE: price,
         _meal: meal,

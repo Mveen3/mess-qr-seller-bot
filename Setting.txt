@@ -4,7 +4,7 @@
 # Use \n for line breaks inside message templates.
 
 # ─── Target Group ───────────────────────────────────────────────
-GROUP_NAME=Mess Buy Sell @ IIITH, Mess Buy Sell @ Open Community IIITH, Mess Buy Sell @ IIITH - 2, Mess Buy Sell - 2 @ IIITH
+GROUP_NAME=temp
 
 # ─── Seller Info ────────────────────────────────────────────────
 UPI_ID=mveen@upi

@@ -17,6 +17,7 @@ const { applyOverrides } = require('./utils/config');
 const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
+const buyerHandler = require('./utils/buyerHandler');
 
 // ─── Runtime state set by CLI menu ──────────────────────────
 let runOpts = {};
@@ -88,27 +89,31 @@ client.on('ready', async () => {
         targetChats.forEach((c) => console.log(`   • "${c.name}" (${c.id._serialized})`));
         console.log('');
 
-        startScheduler(
-            async (text) => {
-                for (const chat of targetChats) {
-                    try {
-                        await client.sendMessage(chat.id._serialized, text);
-                    } catch (err) {
-                        console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
+        if (runOpts.mode === 'BUYING') {
+            buyerHandler.startBuying(client, targetChats, runOpts._mess, runOpts._maxPrice);
+        } else {
+            startScheduler(
+                async (text) => {
+                    for (const chat of targetChats) {
+                        try {
+                            await client.sendMessage(chat.id._serialized, text);
+                        } catch (err) {
+                            console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
+                        }
                     }
-                }
-            },
-            async () => {
-                console.log('🛑 [Main] Auto-stop triggered — time limit reached without sale.');
-                handleUnsoldStop();
-            },
-            isSold,
-            {
-                meal: runOpts._meal,
-                mess: runOpts._mess,
-                numMessages: runOpts._numMessages,
-            },
-        );
+                },
+                async () => {
+                    console.log('🛑 [Main] Auto-stop triggered — time limit reached without sale.');
+                    handleUnsoldStop();
+                },
+                isSold,
+                {
+                    meal: runOpts._meal,
+                    mess: runOpts._mess,
+                    numMessages: runOpts._numMessages,
+                },
+            );
+        }
     } catch (err) {
         console.error('❌ [Main] Error in ready handler:', err.message);
     }
@@ -117,6 +122,11 @@ client.on('ready', async () => {
 // ─── Message Event ──────────────────────────────────────────
 client.on('message_create', async (msg) => {
     try {
+        if (runOpts.mode === 'BUYING') {
+            await buyerHandler.handleMessage(msg);
+            return;
+        }
+
         if (msg.fromMe) {
             await handleOwnGroupMessage(msg);
             return;
