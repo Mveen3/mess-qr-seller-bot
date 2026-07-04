@@ -75,14 +75,19 @@ async function showMenu() {
     const isBuying = modeChoice === '1';
 
     if (isBuying) {
-        console.log('\n🛒 Buying Mode Setup\n');
+        console.log(`
+══════════════════════════════════════
+      🛒  Buying Mode Setup         
+══════════════════════════════════════
+`);
+        console.log('📝 Settings (press Enter to use default)\n');
         
         // Mess name
         const messOptions = config.MESS_NAMES;
         const defaultMessIndex = Math.max(0, messOptions.findIndex((name) => name === config.DEFAULT_MESS));
         const messInput = await ask(
             rl,
-            `  Which mess do you want? ${formatIndexedOptions(messOptions)} (default: ${defaultMessIndex}): `
+            `  Mess name? ${formatIndexedOptions(messOptions)} (default: ${defaultMessIndex}): `
         );
         const mess = parseIndexedChoice(messInput, messOptions, defaultMessIndex);
 
@@ -94,7 +99,7 @@ async function showMenu() {
 
         console.log(`
 ──────────────────────────────────────
-  🛒 Buying Mode active          
+  ✅ Buying settings applied          
 ──────────────────────────────────────
   Mess        : ${mess}${safeRepeat(22 - mess.length)}
   Max Price   : ₹${maxPrice}${safeRepeat(20 - String(maxPrice).length)}
@@ -151,7 +156,7 @@ async function showMenu() {
 
     console.log(`
 ──────────────────────────────────────
-  ✅ Custom settings applied          
+  ✅ Selling settings applied          
 ──────────────────────────────────────
   Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${safeRepeat(21 - (enableNegotiation ? 3 : 2))}
   Price       : ₹${price}${safeRepeat(20 - String(price).length)}
