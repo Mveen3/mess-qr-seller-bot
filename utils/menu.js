@@ -113,29 +113,8 @@ async function showMenu() {
 ══════════════════════════════════════
       🏷️  Selling Mode Setup         
 ══════════════════════════════════════
-  [0]  Run with default settings     
-  [1]  Run with custom settings      
-══════════════════════════════════════
 `);
-
-    const choice = await ask(rl, '👉 Enter your choice [0/1] (default: 0): ');
-
-    if (choice === '0' || choice === '') {
-        rl.close();
-        const meal = detectMeal();
-        console.log(`\n✅ Using default settings — ${config.DEFAULT_MESS} ${meal.charAt(0).toUpperCase() + meal.slice(1)} @ ₹${config.DEFAULT_PRICE}\n`);
-        return {
-            mode: 'SELLING',
-            ENABLE_NEGOTIATION: config.ENABLE_NEGOTIATION,
-            DEFAULT_PRICE: config.DEFAULT_PRICE,
-            _meal: meal,
-            _mess: config.DEFAULT_MESS,
-            _numMessages: config.DEFAULT_NUM_MESSAGES,
-        };
-    }
-
-    // ─── Custom settings ────────────────────────────────────────
-    console.log('\n📝 Custom settings (press Enter to use default)\n');
+    console.log('📝 Settings (press Enter to use default)\n');
 
     // 1. Starting price
     const priceInput = await ask(rl, `  Starting price? (default: ${config.DEFAULT_PRICE}): `);
