@@ -32,7 +32,7 @@ function computeSchedule(meal, numMessages) {
 
     if (config.TESTING) {
         // In testing mode, start 60 seconds from now so the first message isn't skipped.
-        // We preserve this start time globally so that if the scheduler restarts (e.g. buyer says "testing"),
+        // We preserve this start time globally so that if the scheduler restarts (e.g. buyer says "curious"),
         // the testing timeline isn't completely reset, allowing it to accurately resume the current price.
         if (!testingStartDate) {
             testingStartDate = new Date(today.getTime() + 60 * 1000);

@@ -81,6 +81,41 @@ function resolveProjectPath(rawValue) {
     return path.resolve(PROJECT_ROOT, normalized);
 }
 
+function resolveQRImagePath(rawValue) {
+    const normalized = (rawValue || '').trim();
+    const defaultPath = path.resolve(PROJECT_ROOT, 'utils');
+    const targetPath = normalized ? (path.isAbsolute(normalized) ? normalized : path.resolve(PROJECT_ROOT, normalized)) : defaultPath;
+
+    const imgExts = ['.png', '.jpg', '.jpeg', '.webp'];
+
+    if (fs.existsSync(targetPath)) {
+        const stats = fs.statSync(targetPath);
+        if (stats.isFile() && imgExts.includes(path.extname(targetPath).toLowerCase())) {
+            return targetPath;
+        }
+        if (stats.isDirectory()) {
+            const files = fs.readdirSync(targetPath);
+            for (const file of files) {
+                if (imgExts.includes(path.extname(file).toLowerCase())) {
+                    return path.join(targetPath, file);
+                }
+            }
+        }
+    }
+
+    // Fallback: search the 'utils' directory for ANY image
+    if (fs.existsSync(defaultPath)) {
+        const files = fs.readdirSync(defaultPath);
+        for (const file of files) {
+            if (imgExts.includes(path.extname(file).toLowerCase())) {
+                return path.join(defaultPath, file);
+            }
+        }
+    }
+
+    return targetPath;
+}
+
 function applyTemplate(template, variables) {
     return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => {
         if (!Object.prototype.hasOwnProperty.call(variables, key)) return match;
@@ -106,7 +141,7 @@ const settings = {
 
     UPI_ID: getText(raw, 'UPI_ID'),
     PHONE_NUMBER: getText(raw, 'PHONE_NUMBER'),
-    QR_IMAGE_PATH: resolveProjectPath(raw.QR_IMAGE_PATH),
+    QR_IMAGE_PATH: resolveQRImagePath(raw.QR_IMAGE_PATH),
 
     MEAL_TIMINGS: {
         breakfast: {

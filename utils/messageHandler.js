@@ -106,8 +106,8 @@ async function handleMessage(msg, client) {
 
         // ── Already sold ────────────────────────────────────────
         if (sold) {
-            // Un-sell if the ACTUAL buyer types "testing"
-            if (allowTestingRevert && stats.buyerId === senderId && body.toLowerCase() === 'testing') {
+            // Un-sell if the ACTUAL buyer types "curious"
+            if (allowTestingRevert && stats.buyerId === senderId && body.toLowerCase() === 'curious') {
                 await revertSale(chat, senderName);
                 return;
             }
@@ -545,7 +545,7 @@ async function revertSale(chat, buyerName) {
     stats.buyerId = null;
     stats.timeSold = null;
 
-    console.log(`\n⏪ [Handler] UNSOLD — ${buyerName} was just testing.`);
+    console.log(`\n⏪ [Handler] UNSOLD — ${buyerName} was just curious.`);
 
     try {
         await chat.sendMessage(config.testRevertedMessage());

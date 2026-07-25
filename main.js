@@ -248,7 +248,6 @@ client.on('ready', async () => {
                 return window.WWebJS.getContactModel(contact);
             };
         });
-        console.log('🔧 [Main] Patched WWebJS getChatModel, getContactModel, getContact to handle IDB errors.');
 
         const chats = await client.getChats();
         const configuredGroups = config.GROUP_NAMES || [];
