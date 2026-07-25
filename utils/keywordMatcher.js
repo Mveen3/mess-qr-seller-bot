@@ -4,9 +4,9 @@ const { BUYER_KEYWORDS, DONE_KEYWORDS } = require('./config');
 
 function isBuyerKeyword(text) {
     const lower = normalizeText(text);
-    if (!lower) return false;
+    if (!lower) return null;
 
-    return BUYER_KEYWORDS.some((kw) => {
+    const matched = BUYER_KEYWORDS.find((kw) => {
         const keyword = normalizeText(kw);
         if (!keyword) return false;
 
@@ -18,15 +18,17 @@ function isBuyerKeyword(text) {
         const regex = new RegExp(`(^|[^a-z0-9])${escapeRegex(keyword)}([^a-z0-9]|$)`, 'i');
         return regex.test(lower);
     });
+    return matched || null;
 }
 
 function isDoneKeyword(text) {
     const lower = normalizeText(text);
-    if (!lower) return false;
-    return DONE_KEYWORDS.some((kw) => {
+    if (!lower) return null;
+    const matched = DONE_KEYWORDS.find((kw) => {
         const keyword = normalizeText(kw);
         return keyword ? lower.includes(keyword) : false;
     });
+    return matched || null;
 }
 
 function escapeRegex(str) {

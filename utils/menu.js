@@ -64,61 +64,10 @@ async function showMenu() {
 
     console.log(`
 ══════════════════════════════════════
-      🍽️  Mess QR Selling/Buying Bot         
-══════════════════════════════════════
-  [0]  Selling Mode (default)     
-  [1]  Buying Mode     
+      🍽️  Mess QR Selling Bot         
 ══════════════════════════════════════
 `);
 
-    const modeChoice = await ask(rl, '👉 Choose Mode [0=Selling / 1=Buying] (default: 0): ');
-    const isBuying = modeChoice === '1';
-
-    if (isBuying) {
-        console.log(`
-══════════════════════════════════════
-      🛒  Buying Mode Setup         
-══════════════════════════════════════
-`);
-        console.log('📝 Settings (press Enter to use default)\n');
-        
-        // Mess name
-        const messOptions = config.MESS_NAMES;
-        const defaultMessIndex = Math.max(0, messOptions.findIndex((name) => name === config.DEFAULT_MESS));
-        const messInput = await ask(
-            rl,
-            `  Mess name? ${formatIndexedOptions(messOptions)} (default: ${defaultMessIndex}): `
-        );
-        const mess = parseIndexedChoice(messInput, messOptions, defaultMessIndex);
-
-        // Max price
-        const priceInput = await ask(rl, `  Max acceptable price? (default: 40): `);
-        const maxPrice = parseIntegerOrDefault(priceInput, 40, { min: 1, max: 500 });
-
-        rl.close();
-
-        console.log(`
-──────────────────────────────────────
-  ✅ Buying settings applied          
-──────────────────────────────────────
-  Mess        : ${mess}${safeRepeat(22 - mess.length)}
-  Max Price   : ₹${maxPrice}${safeRepeat(20 - String(maxPrice).length)}
-──────────────────────────────────────
-`);
-
-        return {
-            mode: 'BUYING',
-            _mess: mess,
-            _maxPrice: maxPrice,
-        };
-    }
-
-    // --- Selling Mode ---
-    console.log(`
-══════════════════════════════════════
-      🏷️  Selling Mode Setup         
-══════════════════════════════════════
-`);
     console.log('📝 Settings (press Enter to use default)\n');
 
     // 1. Starting price
@@ -156,7 +105,7 @@ async function showMenu() {
 
     console.log(`
 ──────────────────────────────────────
-  ✅ Selling settings applied          
+  ✅ Settings applied          
 ──────────────────────────────────────
   Negotiation : ${enableNegotiation ? 'Yes' : 'No'}${safeRepeat(21 - (enableNegotiation ? 3 : 2))}
   Price       : ₹${price}${safeRepeat(20 - String(price).length)}

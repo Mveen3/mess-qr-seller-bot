@@ -3,13 +3,13 @@
 # Lists are comma-separated values.
 # Use \n for line breaks inside message templates.
 
-# ─── Target Group ───────────────────────────────────────────────
-GROUP_NAME=temp
 
-# ─── Seller Info ────────────────────────────────────────────────
-UPI_ID=mveen@upi
-PHONE_NUMBER=8948966418
-QR_IMAGE_PATH=utils/qr.png
+# ─── For Testing ────────────────────────────────────────────────
+TESTING=false
+TESTING_GROUP_NAME=temp1, temp2
+
+# ─── Target Group ───────────────────────────────────────────────
+# GROUP_NAME=Mess Buy Sell @ IIITH, Mess Buy Sell @ Open Community IIITH, Mess Buy Sell @ IIITH - 2, Mess Buy Sell - 2 @ IIITH
 
 # ─── Meal Timings ───────────────────────────────────────────────
 MEAL_BREAKFAST_START=07:30
@@ -18,6 +18,11 @@ MEAL_LUNCH_START=12:30
 MEAL_LUNCH_END=14:30
 MEAL_DINNER_START=19:30
 MEAL_DINNER_END=21:30
+
+# ─── Seller Info ────────────────────────────────────────────────
+UPI_ID=mveen3@oksbi
+PHONE_NUMBER=8948966418
+QR_IMAGE_PATH=utils/qr.png
 
 # ─── Defaults ───────────────────────────────────────────────────
 MESS_NAMES=Palash, Kadamba Veg, Kadamba NV, Yuktahar
@@ -36,8 +41,8 @@ BUYER_INACTIVITY_MS=90000
 BUYER_TIMEOUT_WARNING_MS=30000
 
 # ─── Keywords ───────────────────────────────────────────────────
-BUYER_KEYWORDS=buy, ?, want, wants, available, available?, avail, interested, need, qr, breakfast, still, selling, sold, price, yes, how much, take, wanna, is it there, kharidna, chahiye, dedo, dega, dede, bechna, kitne, kitna, chaiye, lelo, bech, bhejo, bhej
-DONE_KEYWORDS=done, paid, sent, payment done, transferred, completed, successful, money sent, confirm, confirmed, pay kiya, pay kar diya, paid bro, ho gaya, hogaya, kar diya, kardiya, bhej diya, bhejdiya, de diya, dediya, krdiya, hogya, krdya, bhejdia, payment hogaya, payment hogya
+BUYER_KEYWORDS=buy, want, wants, available, available?, interested, need, qr, breakfast, sold, wanna, is it there, kharidna, chahiye, chaiye, dedo, bhejo, bhej
+DONE_KEYWORDS=done, paid, sent, pay, kar diya
 
 # ─── Message Templates ──────────────────────────────────────────
 SELL_MESSAGE_TEMPLATE=Sell {messName} {mealTypeCapitalized} @{price}

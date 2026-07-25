@@ -17,7 +17,7 @@ const { applyOverrides } = require('./utils/config');
 const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
-const buyerHandler = require('./utils/buyerHandler');
+
 
 // ─── Runtime state set by CLI menu ──────────────────────────
 let runOpts = {};
@@ -42,9 +42,10 @@ const client = new Client({
             '--single-process',
         ],
     },
-    // Cache WhatsApp Web version to avoid re-downloading on every startup
+    // Don't cache WhatsApp Web version — always fetch the latest to avoid
+    // stale-cache errors when WhatsApp updates its internal module structure.
     webVersionCache: {
-        type: 'local',
+        type: 'none',
     },
 });
 
@@ -73,6 +74,182 @@ client.on('ready', async () => {
 
         setClient(client);
 
+        // ── Monkey-patch WWebJS methods to fix broken IDB calls ──────
+        // The library's getChatModel, getContact, and getContactModel crash with
+        // "No key or key range specified" (minified as 'r') when IDB is queried
+        // (groupMetadata, BusinessProfile, Blocklist). We wrap them in try/catch.
+        await client.pupPage.evaluate(() => {
+            // 1. Patch getChatModel
+            const origGetChatModel = window.WWebJS.getChatModel;
+            window.WWebJS.getChatModel = async (chat, opts = {}) => {
+                if (!chat) return null;
+                const { isChannel = false } = opts;
+
+                const model = chat.serialize();
+                model.isGroup = false;
+                model.isMuted = chat.mute?.expiration !== 0;
+
+                if (isChannel) {
+                    try {
+                        model.isChannel = window
+                            .require('WAWebChatGetters')
+                            .getIsNewsletter(chat);
+                    } catch (_) { /* skip */ }
+                } else {
+                    model.formattedTitle = chat.formattedTitle;
+                }
+
+                if (chat.groupMetadata) {
+                    model.isGroup = true;
+                    try {
+                        const chatWid = window
+                            .require('WAWebWidFactory')
+                            .createWid(chat.id._serialized);
+                        const groupMetadata =
+                            window.require('WAWebCollections').GroupMetadata ||
+                            window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                        await groupMetadata.update(chatWid);
+                    } catch (_) {
+                        // skip IDB
+                    }
+
+                    try {
+                        const { toPn } = window.require('WAWebLidMigrationUtils');
+                        const serializedMetadata = chat.groupMetadata.serialize();
+                        for (const p of serializedMetadata.participants || []) {
+                            p.id = toPn(p.id) ?? p.id;
+                        }
+                        model.groupMetadata = serializedMetadata;
+                    } catch (_) {
+                        model.groupMetadata = chat.groupMetadata.serialize
+                            ? chat.groupMetadata.serialize()
+                            : {};
+                    }
+                    model.isReadOnly = chat.groupMetadata.announce;
+                }
+
+                if (chat.newsletterMetadata) {
+                    try {
+                        const newsletterMetadata =
+                            window.require('WAWebCollections')
+                                .NewsletterMetadataCollection ||
+                            window.require('WAWebCollections')
+                                .WAWebNewsletterMetadataCollection;
+                        await newsletterMetadata.update(chat.id);
+                        model.channelMetadata = chat.newsletterMetadata.serialize();
+                        model.channelMetadata.createdAtTs =
+                            chat.newsletterMetadata.creationTime;
+                    } catch (_) { }
+                }
+
+                model.lastMessage = null;
+                if (model.msgs && model.msgs.length) {
+                    try {
+                        const lastMessage = chat.lastReceivedKey
+                            ? window
+                                .require('WAWebCollections')
+                                .Msg.get(chat.lastReceivedKey._serialized) ||
+                            (
+                                await window
+                                    .require('WAWebCollections')
+                                    .Msg.getMessagesById([
+                                        chat.lastReceivedKey._serialized,
+                                    ])
+                            )?.messages?.[0]
+                            : null;
+                        if (lastMessage) {
+                            model.lastMessage =
+                                window.WWebJS.getMessageModel(lastMessage);
+                        }
+                    } catch (_) { }
+                }
+
+                return model;
+            };
+
+            // 2. Patch getContactModel
+            const origGetContactModel = window.WWebJS.getContactModel;
+            window.WWebJS.getContactModel = (contact) => {
+                let res = contact.serialize();
+                const wid = window
+                    .require('WAWebWidFactory')
+                    .createWidFromWidLike(contact.id);
+
+                if (wid && wid.isLid() && contact.phoneNumber) {
+                    res.id = contact.phoneNumber;
+                }
+
+                res.isBusiness = contact.isBusiness === undefined ? false : contact.isBusiness;
+
+                if (contact.businessProfile) {
+                    try {
+                        res.businessProfile = contact.businessProfile.serialize();
+                    } catch (e) { }
+                }
+
+                res.isBlocked = contact.isContactBlocked;
+                if (!res.isBlocked) {
+                    try {
+                        const alt = window
+                            .require('WAWebApiContact')
+                            .getAlternateUserWid(wid);
+                        if (alt) {
+                            res.isBlocked = !!window
+                                .require('WAWebCollections')
+                                .Blocklist.get(alt);
+                        }
+                    } catch (e) {
+                        // skip Blocklist.get IDB errors
+                    }
+                }
+
+                const ContactMethods = window.require('WAWebContactGetters');
+                try { res.isMe = ContactMethods.getIsMe(contact); } catch (e) { }
+                try { res.isUser = ContactMethods.getIsUser(contact); } catch (e) { }
+                try { res.isGroup = ContactMethods.getIsGroup(contact); } catch (e) { }
+                try { res.isWAContact = ContactMethods.getIsWAContact(contact); } catch (e) { }
+                try { res.userid = ContactMethods.getUserid(contact); } catch (e) { }
+                try { res.verifiedName = ContactMethods.getVerifiedName(contact); } catch (e) { }
+                try { res.verifiedLevel = ContactMethods.getVerifiedLevel(contact); } catch (e) { }
+                try { res.statusMute = ContactMethods.getStatusMute(contact); } catch (e) { }
+                try { res.name = ContactMethods.getName(contact); } catch (e) { }
+                try { res.shortName = ContactMethods.getShortName(contact); } catch (e) { }
+                try { res.pushname = ContactMethods.getPushname(contact); } catch (e) { }
+
+                try {
+                    const { getIsMyContact } = window.require('WAWebFrontendContactGetters');
+                    res.isMyContact = getIsMyContact(contact);
+                } catch (e) { }
+                try { res.isEnterprise = ContactMethods.getIsEnterprise(contact); } catch (e) { }
+
+                return res;
+            };
+
+            // 3. Patch getContact
+            const origGetContact = window.WWebJS.getContact;
+            window.WWebJS.getContact = async (contactId) => {
+                const contactWid = window
+                    .require('WAWebWidFactory')
+                    .createWid(contactId);
+                const contact = await window
+                    .require('WAWebCollections')
+                    .Contact.find(contactWid);
+
+                if (contact.isBusiness || contact.isEnterprise) {
+                    try {
+                        const bizProfile = await window
+                            .require('WAWebCollections')
+                            .BusinessProfile.find(contactWid);
+                        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+                    } catch (e) {
+                        // skip BusinessProfile.find IDB errors
+                    }
+                }
+                return window.WWebJS.getContactModel(contact);
+            };
+        });
+        console.log('🔧 [Main] Patched WWebJS getChatModel, getContactModel, getContact to handle IDB errors.');
+
         const chats = await client.getChats();
         const configuredGroups = config.GROUP_NAMES || [];
         targetChats = chats.filter((c) => c.isGroup && c.name && configuredGroups.includes(c.name.trim()));
@@ -89,43 +266,37 @@ client.on('ready', async () => {
         targetChats.forEach((c) => console.log(`   • "${c.name}" (${c.id._serialized})`));
         console.log('');
 
-        if (runOpts.mode === 'BUYING') {
-            buyerHandler.startBuying(client, targetChats, runOpts._mess, runOpts._maxPrice);
-        } else {
-            startScheduler(
-                async (text) => {
-                    for (const chat of targetChats) {
-                        try {
-                            await client.sendMessage(chat.id._serialized, text);
-                        } catch (err) {
-                            console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
-                        }
+        startScheduler(
+            async (text) => {
+                for (const chat of targetChats) {
+                    try {
+                        await client.sendMessage(chat.id._serialized, text);
+                    } catch (err) {
+                        console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
                     }
-                },
-                async () => {
-                    console.log('🛑 [Main] Auto-stop triggered — time limit reached without sale.');
-                    handleUnsoldStop();
-                },
-                isSold,
-                {
-                    meal: runOpts._meal,
-                    mess: runOpts._mess,
-                    numMessages: runOpts._numMessages,
-                },
-            );
-        }
+                }
+            },
+            async () => {
+                console.log('🛑 [Main] Auto-stop triggered — time limit reached without sale.');
+                handleUnsoldStop();
+            },
+            isSold,
+            {
+                meal: runOpts._meal,
+                mess: runOpts._mess,
+                numMessages: runOpts._numMessages,
+            },
+        );
     } catch (err) {
         console.error('❌ [Main] Error in ready handler:', err.message);
+        console.error('❌ [Main] Full error:', err);
+        console.error('❌ [Main] Stack:', err.stack);
     }
 });
 
 // ─── Message Event ──────────────────────────────────────────
 client.on('message_create', async (msg) => {
     try {
-        if (runOpts.mode === 'BUYING') {
-            await buyerHandler.handleMessage(msg);
-            return;
-        }
 
         if (msg.fromMe) {
             await handleOwnGroupMessage(msg);
@@ -138,6 +309,26 @@ client.on('message_create', async (msg) => {
         await handleMessage(msg, client);
     } catch (err) {
         console.error('❌ [Main] Error handling message:', err.message);
+    }
+});
+
+client.on('message_edit', async (msg, newBody, prevBody) => {
+    try {
+        console.log(`[Diagnostic] message_edit triggered. newBody: "${newBody}", msg.body: "${msg.body}", msg.type: "${msg.type}"`);
+        if (newBody) msg.body = newBody; // Ensure body is updated
+
+
+
+        if (msg.fromMe) {
+            await handleOwnGroupMessage(msg);
+            return;
+        }
+
+        if (msg.from && (msg.from.endsWith('@broadcast') || msg.from.endsWith('@g.us'))) return;
+
+        await handleMessage(msg, client);
+    } catch (err) {
+        console.error('❌ [Main] Error handling edited message:', err.message);
     }
 });
 
@@ -175,8 +366,6 @@ process.on('SIGINT', async () => {
 
 // ─── Start ──────────────────────────────────────────────────
 (async () => {
-    console.log('🚀 Mess QR Selling Bot\n');
-
     runOpts = await showMenu();
 
     // Apply CLI overrides to global config

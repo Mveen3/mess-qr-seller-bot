@@ -27,13 +27,15 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
 
 ## Project Structure
 
-- `main.js`: client bootstrap, auth lifecycle, scheduler startup.
-- `Setting.txt`: user-editable runtime configuration.
-- `utils/config.js`: settings parser + defaults + message templates.
-- `utils/priceScheduler.js`: timed posting and auto-stop logic.
-- `utils/messageHandler.js`: DM flow, queueing, sale completion.
-- `utils/keywordMatcher.js`: buyer/done intent matching.
-- `utils/priceParser.js`: negotiation number extraction.
+- `main.js`: Client bootstrap, auth lifecycle, scheduler startup, message routing.
+- `Setting.txt`: All runtime configuration (the single source of truth).
+- `utils/config.js`: Reads and parses `Setting.txt`, exposes settings and message template functions.
+- `utils/menu.js`: Interactive CLI setup prompts (price, meal, mess, negotiation, message count).
+- `utils/priceScheduler.js`: Timed posting and auto-stop logic.
+- `utils/messageHandler.js`: DM flow, buyer queueing, sale completion, reaction management.
+- `utils/keywordMatcher.js`: Buyer/done intent matching.
+- `utils/priceParser.js`: Price extraction from negotiation messages.
+- `utils/qr.png`: QR image sent to the buyer on sale completion.
 
 ## Setup
 
@@ -55,16 +57,17 @@ node main.js
 
 At startup:
 
-1. Choose default mode (`0`) or custom mode (`1`).
+1. Configure settings (price, negotiation, meal, mess, number of messages).
 2. On first login, scan the WhatsApp QR in terminal.
-3. Bot loads group, starts scheduler, and listens to DMs.
+3. Bot loads groups, starts scheduler, and listens to DMs.
 
 ## Important Config Flags
 
-- `BUYER_INACTIVITY_MS=90000`
-- `BUYER_TIMEOUT_WARNING_MS=30000`
-- `ENABLE_NEGOTIATION=true|false`
-- `NEGOTIATION_MARGIN=5`
+- `BUYER_INACTIVITY_MS=90000` — Time before moving to the next buyer.
+- `BUYER_TIMEOUT_WARNING_MS=30000` — Warning sent before timeout.
+- `ENABLE_NEGOTIATION=true|false` — Allow price negotiation via DM.
+- `NEGOTIATION_MARGIN=5` — Max discount below current price.
+- `PRICE_DROP=5` — Price drop between scheduled messages.
 
 ## Stop
 

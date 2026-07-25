@@ -12,6 +12,8 @@ let storedOnStopFn = null;
 let storedIsSoldFn = null;
 let storedOpts = null;
 
+let testingStartDate = null;
+
 /**
  * Compute equally-spaced send times between meal start and end.
  * @param {string} meal — 'breakfast', 'lunch', or 'dinner'
@@ -25,19 +27,31 @@ function computeSchedule(meal, numMessages) {
 
     const today = new Date();
 
-    const [startH, startM] = timing.start.split(':').map(Number);
-    const [endH, endM] = timing.end.split(':').map(Number);
-
     const startDate = new Date(today);
-    startDate.setHours(startH, startM, 0, 0);
-
     const endDate = new Date(today);
-    endDate.setHours(endH, endM, 0, 0);
 
-    // If the meal window already ended today, schedule for tomorrow
-    if (endDate.getTime() < Date.now()) {
-        startDate.setDate(startDate.getDate() + 1);
-        endDate.setDate(endDate.getDate() + 1);
+    if (config.TESTING) {
+        // In testing mode, start 60 seconds from now so the first message isn't skipped.
+        // We preserve this start time globally so that if the scheduler restarts (e.g. buyer says "testing"),
+        // the testing timeline isn't completely reset, allowing it to accurately resume the current price.
+        if (!testingStartDate) {
+            testingStartDate = new Date(today.getTime() + 60 * 1000);
+        }
+        console.log('🧪 [Scheduler] TESTING mode is ON — bypassing meal timing.');
+        startDate.setTime(testingStartDate.getTime());
+        endDate.setTime(testingStartDate.getTime() + safeNumMessages * 30 * 1000);
+    } else {
+        const [startH, startM] = timing.start.split(':').map(Number);
+        const [endH, endM] = timing.end.split(':').map(Number);
+
+        startDate.setHours(startH, startM, 0, 0);
+        endDate.setHours(endH, endM, 0, 0);
+
+        // If the meal window already ended today, schedule for tomorrow
+        if (endDate.getTime() < Date.now()) {
+            startDate.setDate(startDate.getDate() + 1);
+            endDate.setDate(endDate.getDate() + 1);
+        }
     }
     const totalMs = endDate.getTime() - startDate.getTime();
     const intervalMs = safeNumMessages > 1 ? totalMs / safeNumMessages : totalMs;
@@ -114,7 +128,8 @@ function startScheduler(sendMessageFn, onStopFn, isSoldFn, opts) {
         } else {
             // Time already passed — skip this slot
             console.log(`   ⏭️  (skipped — time already passed)`);
-            // Don't update currentPrice — it stays at DEFAULT_PRICE
+            // Update the current price so that buyers messaging *now* get the correct active price
+            currentPrice = price;
         }
 
         priceForStep = Math.max(priceForStep - priceDrop, 0);

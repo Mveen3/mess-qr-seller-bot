@@ -36,10 +36,10 @@ function isPaymentSignal(msg, currentPrice) {
     const paymentTypeHit = type.includes('payment') || type.includes('pay');
 
     const paymentTextHit = [
+        '₹',
         'completed',
+        'sent to',
         'sent to you',
-        'sent to naveenmishra',
-        'sent to naveen mishra',
     ].some((pattern) => bodyLower.includes(pattern));
 
     const hasRupeeSymbol = body.includes('₹');
@@ -75,19 +75,31 @@ function isWhatsAppPaySignal(msg) {
 async function handleMessage(msg, client) {
     try {
         const senderId = msg.from;
-        const body = (msg.body || '').trim();
+        if (msg._data && msg._data.subtype === 'bot_typing_placeholder') {
+            return;
+        }
+
+        let body = msg.body;
+        if (!body && msg._data) {
+            body = msg._data.body || msg._data.caption || msg._data.text || '';
+        }
+        body = (body || '').trim();
+
+        const contact = await msg.getContact();
+        const senderName = contact.pushname || contact.name || senderId;
+
+
 
         // ── Filter: only respond to personal DMs ────────────────
         if (senderId.endsWith('@broadcast') || senderId.endsWith('@g.us')) {
             return; // ignore status updates and group messages
         }
-
-        const contact = await msg.getContact();
-        const senderName = contact.pushname || contact.name || senderId;
         const chat = await msg.getChat();
 
         const me = client.info.wid._serialized;
         if (senderId === me) return;
+
+
 
         stats.messagesReceived++;
         console.log(`📩 [Handler] DM from ${senderName}: "${body}"`);
@@ -100,9 +112,10 @@ async function handleMessage(msg, client) {
                 return;
             }
 
-            if (isBuyerKeyword(body)) {
+            const buyerKwSold = isBuyerKeyword(body);
+            if (buyerKwSold) {
                 await chat.sendMessage(config.soldMessage());
-                console.log(`🚫 [Handler] Replied "Sorry Sold" to ${senderName}.`);
+                console.log(`🚫 [Handler] Replied "Sorry Sold" to ${senderName}. Triggered by keyword: "${buyerKwSold}"`);
             }
             return;
         }
@@ -119,6 +132,10 @@ async function handleMessage(msg, client) {
                     console.log(`💳 [Handler] WhatsApp Pay signal detected for ${senderName}.`);
                 } else if (paymentSignal) {
                     console.log(`💳 [Handler] Payment signal detected for ${senderName} (type: ${msg.type || 'unknown'}).`);
+                } else if (msg.hasMedia) {
+                    console.log(`📸 [Handler] Media (screenshot) received from ${senderName}.`);
+                } else if (doneKeyword) {
+                    console.log(`💬 [Handler] "Done" keyword detected for ${senderName}: "${doneKeyword}"`);
                 }
                 await completeSale(chat, senderName);
                 return;
@@ -135,7 +152,9 @@ async function handleMessage(msg, client) {
         }
 
         // ── Buyer keyword ───────────────────────────────────────
-        if (isBuyerKeyword(body)) {
+        const buyerKw = isBuyerKeyword(body);
+        if (buyerKw) {
+            console.log(`🎯 [Handler] Buyer intent triggered by keyword: "${buyerKw}"`);
             await handleBuyerIntent(chat, senderId, senderName, client);
             return;
         }
@@ -183,12 +202,12 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
     } else {
         // ── After 90s window → immediate move to next buyer ──
         console.log(`⏱️  [Handler] ${currentBuyer.name} exceeded 90s window. Sending timeout msg & assigning new buyer.`);
-        
+
         const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
         if (!alreadyQueued) {
             buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
         }
-        
+
         await moveNextBuyer();
     }
 }
@@ -271,7 +290,7 @@ async function moveNextBuyer() {
     } catch (err) {
         console.error('❌ [Timer] Error notifying leaving buyer:', err.message);
     }
-    
+
     releaseBuyer();
     await tryNextBuyer();
 }
@@ -282,7 +301,35 @@ function clearAllTimers() {
 }
 
 function getMessageKey(msg) {
-    return msg?.id?._serialized || msg?.id?.id || null;
+    if (!msg || !msg.id) return null;
+    let key = null;
+
+    if (msg.id._serialized) {
+        key = msg.id._serialized;
+    } else {
+        // WhatsApp Web often minifies the serialized ID to keys like $1
+        const possibleKey = Object.values(msg.id).find(v =>
+            typeof v === 'string' &&
+            (v.startsWith('true_') || v.startsWith('false_')) &&
+            v.includes(msg.id.id) &&
+            v.includes('@')
+        );
+
+        if (possibleKey) {
+            key = possibleKey;
+        } else if (msg.id.remote && msg.id.id) {
+            // Reconstruct manually
+            key = `${msg.id.fromMe ? 'true' : 'false'}_${msg.id.remote}_${msg.id.id}`;
+            if (msg.id.participant && msg.id.participant._serialized) {
+                key += `_${msg.id.participant._serialized}`;
+            }
+        } else {
+            key = msg.id.id || null;
+        }
+    }
+
+    // console.log(`[Diagnostic] getMessageKey returning: ${key} (from id: ${JSON.stringify(msg.id)})`);
+    return key;
 }
 
 async function findTargetGroupChats() {
@@ -293,122 +340,7 @@ async function findTargetGroupChats() {
     return chats.filter((c) => c.isGroup && c.name && configuredGroups.includes(c.name.trim()));
 }
 
-async function fetchOwnMessageIdsCompat(chatId, limit = 500) {
-    if (!globalClient?.pupPage || !chatId) return [];
-
-    return globalClient.pupPage.evaluate(async (serializedChatId, maxLimit) => {
-        const limitValue = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 500;
-
-        const toMessageId = (msg) => {
-            const id = msg?.id;
-            if (!id) return null;
-            return id._serialized || id.id || null;
-        };
-
-        const isOwnNonNotificationMessage = (msg) =>
-            Boolean(msg) && !msg.isNotification && (msg?.id?.fromMe === true || msg?.fromMe === true);
-
-        const getChatModel = async () => {
-            const widFactory = window.Store?.WidFactory;
-            const chatStore = window.Store?.Chat;
-            if (!widFactory || !chatStore) return null;
-
-            const wid = widFactory.createWid(serializedChatId);
-            return chatStore.get(wid) || await chatStore.find(wid);
-        };
-
-        const chat = await getChatModel();
-        if (!chat?.msgs) return [];
-
-        const seen = new Set();
-        const collected = [];
-
-        const collectBatch = (messages) => {
-            if (!Array.isArray(messages)) return false;
-
-            const orderedMessages = [...messages].sort((a, b) => (a?.t || 0) - (b?.t || 0));
-            for (const message of orderedMessages) {
-                if (!isOwnNonNotificationMessage(message)) continue;
-
-                const messageId = toMessageId(message);
-                if (!messageId || seen.has(messageId)) continue;
-
-                seen.add(messageId);
-                collected.push(messageId);
-                if (collected.length >= limitValue) return true;
-            }
-
-            return false;
-        };
-
-        const getLoadedMessages = () => {
-            if (!chat.msgs) return [];
-            if (typeof chat.msgs.getModelsArray === 'function') return chat.msgs.getModelsArray();
-            if (Array.isArray(chat.msgs.models)) return chat.msgs.models;
-            return [];
-        };
-
-        collectBatch(getLoadedMessages());
-
-        const loaders = [];
-        const conversationMsgs = window.Store?.ConversationMsgs;
-        if (conversationMsgs?.loadEarlierMsgs) {
-            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat, chat.msgs));
-            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat.msgs, chat));
-            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat));
-            loaders.push(() => conversationMsgs.loadEarlierMsgs(chat.msgs));
-        }
-
-        const msgStore = window.Store?.Msg;
-        if (msgStore?.loadEarlierMsgs) {
-            loaders.push(() => msgStore.loadEarlierMsgs(chat, chat.msgs));
-            loaders.push(() => msgStore.loadEarlierMsgs(chat.msgs, chat));
-            loaders.push(() => msgStore.loadEarlierMsgs(chat));
-            loaders.push(() => msgStore.loadEarlierMsgs(chat.msgs));
-        }
-
-        let noProgressRounds = 0;
-        while (collected.length < limitValue && loaders.length > 0 && noProgressRounds < 3) {
-            let progress = false;
-
-            for (const loadEarlier of loaders) {
-                try {
-                    const loaded = await loadEarlier();
-                    const before = collected.length;
-
-                    if (Array.isArray(loaded)) {
-                        collectBatch(loaded);
-                    } else if (Array.isArray(loaded?.messages)) {
-                        collectBatch(loaded.messages);
-                    } else if (Array.isArray(loaded?.models)) {
-                        collectBatch(loaded.models);
-                    }
-
-                    if (collected.length > before) {
-                        progress = true;
-                        break;
-                    }
-                } catch (_) {
-                    // Try the next loadEarlier signature.
-                }
-            }
-
-            const beforeLoaded = collected.length;
-            collectBatch(getLoadedMessages());
-            if (collected.length > beforeLoaded) {
-                progress = true;
-            }
-
-            noProgressRounds = progress ? 0 : noProgressRounds + 1;
-        }
-
-        if (collected.length > limitValue) {
-            return collected.slice(collected.length - limitValue);
-        }
-
-        return collected;
-    }, chatId, limit);
-}
+// Removed fetchOwnMessageIdsCompat in favor of built-in chat.fetchMessages
 
 async function fetchOwnGroupMessagesForBackfill(limit = 500) {
     const targetGroups = await findTargetGroupChats();
@@ -421,15 +353,15 @@ async function fetchOwnGroupMessagesForBackfill(limit = 500) {
         const messages = [];
 
         for (const targetGroup of targetGroups) {
-            const messageIds = await fetchOwnMessageIdsCompat(targetGroup.id._serialized, limit);
-            for (const messageId of messageIds) {
-                try {
-                    const message = await globalClient.getMessageById(messageId);
-                    if (!message || !message.fromMe) continue;
-                    messages.push(message);
-                } catch (err) {
-                    console.error(`❌ [Handler] Failed to hydrate message ${messageId}:`, err.message);
+            try {
+                const recentMsgs = await targetGroup.fetchMessages({ limit: limit });
+                for (const msg of recentMsgs) {
+                    if (msg.fromMe) {
+                        messages.push(msg);
+                    }
                 }
+            } catch (err) {
+                console.error(`❌ [Handler] Failed to fetch messages for ${targetGroup.name}:`, err.message);
             }
         }
 
@@ -444,10 +376,7 @@ async function removeReactionByMessageId(messageId) {
     if (!globalClient || !messageId) return;
 
     try {
-        const message = await globalClient.getMessageById(messageId);
-        if (!message) return;
-
-        await message.react('');
+        await globalClient.sendReaction(messageId, '');
     } catch (err) {
         console.error(`❌ [Handler] Failed to remove reaction from message ${messageId}:`, err.message);
     }
@@ -466,7 +395,7 @@ async function reactToRecentOwnGroupMessages(limit = 500) {
             if (!key || reactedGroupMessages.has(key)) continue;
 
             try {
-                await message.react('✅');
+                await globalClient.sendReaction(key, '✅');
                 reactedGroupMessages.add(key);
                 reactedCount++;
             } catch (err) {
@@ -555,7 +484,7 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice) {
             if (!alreadyQueued) {
                 buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
             }
-            
+
             const elapsed = Date.now() - currentBuyer.assignedAt;
             if (elapsed < config.BUYER_INACTIVITY_MS) {
                 scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
@@ -664,9 +593,11 @@ async function handleOwnGroupMessage(msg) {
         const configuredGroups = config.GROUP_NAMES || [];
         if (!chat.name || !configuredGroups.includes(chat.name.trim())) return;
 
-        await msg.react('✅');
         const key = getMessageKey(msg);
-        if (key) reactedGroupMessages.add(key);
+        if (key) {
+            await globalClient.sendReaction(key, '✅');
+            reactedGroupMessages.add(key);
+        }
 
         console.log(`✅ [Handler] Reacted to your group message in "${chat.name}".`);
     } catch (err) {
