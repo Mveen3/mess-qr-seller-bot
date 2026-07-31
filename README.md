@@ -71,11 +71,9 @@ Numbers in `mess-blocklist.txt` (project root) are ignored completely — no rep
 The file is git-ignored and **created automatically on first run**, so just open it and add numbers — one per line:
 
 ```
-8946893829
-9876543210
+1234567890
+0987654321
 ```
-
-Only the last 10 digits are matched, so country codes and punctuation don't matter — `+91-8946893829`, `89468 93829`, `894-6893829` and `918946893829` all mean the same person. Lines starting with `#` are comments. Edits apply within ~5 seconds; no restart needed.
 
 ## Important Config Flags
 
