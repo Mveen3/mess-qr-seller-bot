@@ -5,6 +5,7 @@ const path = require('path');
 const { MessageMedia } = require('whatsapp-web.js');
 const config = require('./config');
 const { isBuyerKeyword, isDoneKeyword } = require('./keywordMatcher');
+const { isBlockedWid, isBlockedContact } = require('./blocklist');
 const { extractPrice } = require('./priceParser');
 const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
 
@@ -79,6 +80,12 @@ async function handleMessage(msg, client) {
             return;
         }
 
+        // ── Blocklist: bail out before reading, replying or queueing ──
+        if (isBlockedWid(senderId)) {
+            console.log(`⛔ [Blocklist] Ignored message from ${senderId}.`);
+            return;
+        }
+
         let body = msg.body;
         if (!body && msg._data) {
             body = msg._data.body || msg._data.caption || msg._data.text || '';
@@ -87,6 +94,13 @@ async function handleMessage(msg, client) {
 
         const contact = await msg.getContact();
         const senderName = contact.pushname || contact.name || senderId;
+
+        // A chat addressed by "@lid" hides the phone number in msg.from, so
+        // re-check now that the contact has resolved it.
+        if (isBlockedContact(contact)) {
+            console.log(`⛔ [Blocklist] Ignored message from ${senderName} (${senderId}).`);
+            return;
+        }
 
 
 
@@ -263,6 +277,7 @@ function scheduleNextBuyer(delayMs) {
             if (sold || !currentBuyer) return;
             if (!warningBuyerId || currentBuyer.id !== warningBuyerId) return;
             if (buyerQueue.length === 0) return;
+            if (isBlockedWid(currentBuyer.id)) return; // blocked mid-purchase
 
             try {
                 await currentBuyer.chat.sendMessage(config.timeoutWarningMessage());
@@ -285,10 +300,14 @@ function scheduleNextBuyer(delayMs) {
 async function moveNextBuyer() {
     if (!currentBuyer) return;
 
-    try {
-        await currentBuyer.chat.sendMessage(config.timeoutFinalMessage());
-    } catch (err) {
-        console.error('❌ [Timer] Error notifying leaving buyer:', err.message);
+    if (isBlockedWid(currentBuyer.id)) {
+        console.log(`⛔ [Blocklist] ${currentBuyer.name} was blocked mid-purchase — dropping silently.`);
+    } else {
+        try {
+            await currentBuyer.chat.sendMessage(config.timeoutFinalMessage());
+        } catch (err) {
+            console.error('❌ [Timer] Error notifying leaving buyer:', err.message);
+        }
     }
 
     releaseBuyer();
@@ -447,6 +466,13 @@ async function tryNextBuyer() {
         return;
     }
     const next = buyerQueue.shift();
+
+    if (isBlockedWid(next.id)) {
+        console.log(`⛔ [Blocklist] Skipping queued buyer ${next.name} — number is blocked.`);
+        await tryNextBuyer();
+        return;
+    }
+
     console.log(`➡️  [Handler] Trying next buyer: ${next.name}`);
 
     try {

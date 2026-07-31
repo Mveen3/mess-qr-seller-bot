@@ -17,6 +17,7 @@ const { applyOverrides } = require('./utils/config');
 const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
+const { loadBlocklist, getBlockedNumbers } = require('./utils/blocklist');
 
 
 // ─── Runtime state set by CLI menu ──────────────────────────
@@ -73,6 +74,11 @@ client.on('ready', async () => {
         console.log(`👤 Logged in as: ${client.info.pushname} (${client.info.wid.user})\n`);
 
         setClient(client);
+
+        const blocked = getBlockedNumbers();
+        if (blocked.length > 0) {
+            console.log(`⛔ Ignoring messages from: ${blocked.join(', ')}\n`);
+        }
 
         // ── Monkey-patch WWebJS methods to fix broken IDB calls ──────
         // The library's getChatModel, getContact, and getContactModel crash with
@@ -365,6 +371,10 @@ process.on('SIGINT', async () => {
 
 // ─── Start ──────────────────────────────────────────────────
 (async () => {
+    // Runs before the menu so mess-blocklist.txt is created (if missing) and
+    // ready to edit well before the bot connects.
+    loadBlocklist();
+
     runOpts = await showMenu();
 
     // Apply CLI overrides to global config

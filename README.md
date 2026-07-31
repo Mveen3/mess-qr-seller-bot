@@ -13,6 +13,7 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
 7. ✅ reactions on group sell messages when sold; removed on `CURIOUS` revert.
 8. QR delivery + sale confirmation + report after successful sale.
 9. `CURIOUS` revert for the actual buyer to mark the QR unsold and restart scheduler.
+10. Blocklist to fully ignore chosen numbers.
 
 ## How It Works
 
@@ -35,6 +36,8 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
 - `utils/messageHandler.js`: DM flow, buyer queueing, sale completion, reaction management.
 - `utils/keywordMatcher.js`: Buyer/done intent matching.
 - `utils/priceParser.js`: Price extraction from negotiation messages.
+- `utils/blocklist.js`: Reads `mess-blocklist.txt` and normalises numbers for matching.
+- `mess-blocklist.txt`: Numbers to ignore (git-ignored, auto-created on first run).
 - `utils/`: Directory where the bot automatically looks for your QR image (any `.png`, `.jpg`, `.jpeg`).
 
 ## Setup
@@ -60,6 +63,19 @@ At startup:
 1. Configure settings (price, negotiation, meal, mess, number of messages).
 2. On first login, scan the WhatsApp QR in terminal.
 3. Bot loads groups, starts scheduler, and listens to DMs.
+
+## Blocklist
+
+Numbers in `mess-blocklist.txt` (project root) are ignored completely — no reply, no read receipt, no queue slot, not counted in the report.
+
+The file is git-ignored and **created automatically on first run**, so just open it and add numbers — one per line:
+
+```
+8946893829
+9876543210
+```
+
+Only the last 10 digits are matched, so country codes and punctuation don't matter — `+91-8946893829`, `89468 93829`, `894-6893829` and `918946893829` all mean the same person. Lines starting with `#` are comments. Edits apply within ~5 seconds; no restart needed.
 
 ## Important Config Flags
 
