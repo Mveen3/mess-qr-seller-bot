@@ -10,9 +10,9 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
 4. Buyer queue with inactivity timeout and warning message.
 5. Optional negotiation mode with configurable margin.
 6. Auto-complete sale on WhatsApp Pay signal, payment screenshot, or `DONE` keyword.
-7. ✅ reactions on group sell messages when sold; removed on `CURIOUS` revert.
+7. ✅ reactions on group sell messages when sold; removed on `TESTING` revert.
 8. QR delivery + sale confirmation + report after successful sale.
-9. `CURIOUS` revert for the actual buyer to mark the QR unsold and restart scheduler.
+9. `TESTING` revert for the actual buyer to mark the QR unsold and restart scheduler.
 10. Blocklist to fully ignore chosen numbers.
 
 ## How It Works
@@ -24,7 +24,7 @@ WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM
    - Sends a **photo/screenshot** (assumed payment proof).
    - Replies with **DONE** or any payment confirmation keyword.
 4. On sale completion, the bot sends the QR image, confirms the sale, and adds ✅ reactions to group sell messages.
-5. If the buyer replies with **CURIOUS**, the sale is reverted, ✅ reactions are removed, and the scheduler restarts.
+5. If the buyer replies with **TESTING**, the sale is reverted, ✅ reactions are removed, and the scheduler restarts.
 
 ## Project Structure
 
