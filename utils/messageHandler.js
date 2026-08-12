@@ -8,6 +8,7 @@ const { isBuyerKeyword, isDoneKeyword } = require('./keywordMatcher');
 const { isBlockedWid, isBlockedContact } = require('./blocklist');
 const { extractPrice } = require('./priceParser');
 const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
+const groupReactions = require('./groupReactions');
 
 // ─── State ──────────────────────────────────────────────────
 let sold = false;
@@ -15,7 +16,6 @@ let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
 let queueTimer = null;         // Timer that triggers moving to next buyer
 let queueWarningTimer = null;  // Timer that warns current buyer before timeout
 let reactOwnGroupMessages = false;
-let reactedGroupMessages = new Set(); // msgIds with applied reactions (for removing later)
 let allowTestingRevert = true;
 let buyerQueue = [];
 let stats = {
@@ -319,139 +319,24 @@ function clearAllTimers() {
     if (queueWarningTimer) { clearTimeout(queueWarningTimer); queueWarningTimer = null; }
 }
 
-function getMessageKey(msg) {
-    if (!msg || !msg.id) return null;
-    let key = null;
-
-    if (msg.id._serialized) {
-        key = msg.id._serialized;
-    } else {
-        // WhatsApp Web often minifies the serialized ID to keys like $1
-        const possibleKey = Object.values(msg.id).find(v =>
-            typeof v === 'string' &&
-            (v.startsWith('true_') || v.startsWith('false_')) &&
-            v.includes(msg.id.id) &&
-            v.includes('@')
-        );
-
-        if (possibleKey) {
-            key = possibleKey;
-        } else if (msg.id.remote && msg.id.id) {
-            // Reconstruct manually
-            key = `${msg.id.fromMe ? 'true' : 'false'}_${msg.id.remote}_${msg.id.id}`;
-            if (msg.id.participant && msg.id.participant._serialized) {
-                key += `_${msg.id.participant._serialized}`;
-            }
-        } else {
-            key = msg.id.id || null;
-        }
-    }
-
-    // console.log(`[Diagnostic] getMessageKey returning: ${key} (from id: ${JSON.stringify(msg.id)})`);
-    return key;
-}
-
-async function findTargetGroupChats() {
-    if (!globalClient) return [];
-
-    const chats = await globalClient.getChats();
-    const configuredGroups = config.GROUP_NAMES || [];
-    return chats.filter((c) => c.isGroup && c.name && configuredGroups.includes(c.name.trim()));
-}
-
-// Removed fetchOwnMessageIdsCompat in favor of built-in chat.fetchMessages
-
-async function fetchOwnGroupMessagesForBackfill(limit = 500) {
-    const targetGroups = await findTargetGroupChats();
-    if (!targetGroups || targetGroups.length === 0) {
-        console.warn(`⚠️  [Handler] Could not find any target groups for backfill reactions.`);
-        return { targetGroups: [], messages: [] };
-    }
-
-    try {
-        const messages = [];
-
-        for (const targetGroup of targetGroups) {
-            try {
-                const recentMsgs = await targetGroup.fetchMessages({ limit: limit });
-                for (const msg of recentMsgs) {
-                    if (msg.fromMe) {
-                        messages.push(msg);
-                    }
-                }
-            } catch (err) {
-                console.error(`❌ [Handler] Failed to fetch messages for ${targetGroup.name}:`, err.message);
-            }
-        }
-
-        return { targetGroups, messages };
-    } catch (err) {
-        console.error('❌ [Handler] Failed to load recent own group messages for reactions:', err.message);
-        return { targetGroups, messages: [] };
-    }
-}
-
-async function removeReactionByMessageId(messageId) {
-    if (!globalClient || !messageId) return;
-
-    try {
-        await globalClient.sendReaction(messageId, '');
-    } catch (err) {
-        console.error(`❌ [Handler] Failed to remove reaction from message ${messageId}:`, err.message);
-    }
-}
-
-async function reactToRecentOwnGroupMessages(limit = 500) {
+async function reactToRecentOwnGroupMessages() {
     if (!globalClient || !reactOwnGroupMessages) return;
 
     try {
-        const { targetGroups, messages } = await fetchOwnGroupMessagesForBackfill(limit);
-        if (targetGroups.length === 0) return;
-
-        let reactedCount = 0;
-        for (const message of messages) {
-            const key = getMessageKey(message);
-            if (!key || reactedGroupMessages.has(key)) continue;
-
-            try {
-                await globalClient.sendReaction(key, '✅');
-                reactedGroupMessages.add(key);
-                reactedCount++;
-            } catch (err) {
-                console.error('❌ [Handler] Failed to add backfill reaction:', err.message);
-            }
-        }
-
-        console.log(`✅ [Handler] Backfill reactions completed for ${reactedCount} recent messages across ${targetGroups.length} groups.`);
+        await groupReactions.reactToGroupMessages();
     } catch (err) {
-        console.error('❌ [Handler] Error while backfilling group reactions:', err.message);
+        console.error('❌ [Handler] Error while marking group messages as sold:', err.message);
     }
 }
 
 async function removeAllTrackedReactions() {
-    for (const key of reactedGroupMessages.values()) {
-        await removeReactionByMessageId(key);
-    }
-
-    reactedGroupMessages.clear();
-
     if (!globalClient) return;
 
     try {
-        const { targetGroups, messages } = await fetchOwnGroupMessagesForBackfill(500);
-        if (targetGroups.length === 0) return;
-
-        for (const message of messages) {
-            if (!message.fromMe) continue;
-            const key = getMessageKey(message);
-            if (!key) continue;
-            await removeReactionByMessageId(key);
-        }
+        await groupReactions.clearGroupReactions();
     } catch (err) {
         console.error('❌ [Handler] Error while removing group reactions:', err.message);
     }
-
-    console.log('🧹 [Handler] Cleared ✅ reactions from your target-group messages.');
 }
 
 function releaseBuyer() {
@@ -531,7 +416,6 @@ async function completeSale(chat, buyerName) {
     sold = true;
     reactOwnGroupMessages = true;
     allowTestingRevert = true;
-    reactedGroupMessages.clear();
     stats.soldPrice = getCurrentPrice();
     stats.buyerName = buyerName;
     stats.buyerId = currentBuyer ? currentBuyer.id : null;
@@ -586,7 +470,6 @@ function handleUnsoldStop() {
     sold = true;
     reactOwnGroupMessages = false;
     allowTestingRevert = false;
-    reactedGroupMessages.clear();
     clearAllTimers();
     printReport();
 }
@@ -614,18 +497,19 @@ async function handleOwnGroupMessage(msg) {
     try {
         if (!msg.fromMe || !reactOwnGroupMessages) return;
 
-        const chat = await msg.getChat();
-        if (!chat?.isGroup) return;
-        const configuredGroups = config.GROUP_NAMES || [];
-        if (!chat.name || !configuredGroups.includes(chat.name.trim())) return;
+        // Derive the chat from the message key instead of msg.getChat(): that
+        // call goes through getChatModel, which hits IndexedDB and is the most
+        // breakage-prone part of the library.
+        const chatId = (msg.id && typeof msg.id.remote === 'string' ? msg.id.remote : null) || msg.to || msg.from;
+        if (!chatId || !chatId.endsWith('@g.us')) return;
 
-        const key = getMessageKey(msg);
-        if (key) {
-            await globalClient.sendReaction(key, '✅');
-            reactedGroupMessages.add(key);
+        const group = groupReactions.getTargetGroups().find((g) => g.id === chatId);
+        if (!group) return;
+
+        const reacted = await groupReactions.reactToSingleMessage(msg, chatId);
+        if (reacted) {
+            console.log(`✅ [Handler] Reacted to your group message in "${group.name}".`);
         }
-
-        console.log(`✅ [Handler] Reacted to your group message in "${chat.name}".`);
     } catch (err) {
         console.error('❌ [Handler] Failed to react on own group message:', err.message);
     }
@@ -634,6 +518,7 @@ async function handleOwnGroupMessage(msg) {
 let globalClient = null;
 function setClient(client) {
     globalClient = client;
+    groupReactions.setClient(client);
 }
 
 module.exports = { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient };

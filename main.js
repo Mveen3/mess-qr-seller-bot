@@ -18,6 +18,7 @@ const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
 const { loadBlocklist, getBlockedNumbers } = require('./utils/blocklist');
+const groupReactions = require('./utils/groupReactions');
 
 
 // ─── Runtime state set by CLI menu ──────────────────────────
@@ -255,27 +256,34 @@ client.on('ready', async () => {
             };
         });
 
-        const chats = await client.getChats();
+        // Resolve groups straight from the in-page chat collection. client.getChats()
+        // serialises every chat through getChatModel, which hits IndexedDB and
+        // intermittently returns undefined ("Cannot read properties of undefined
+        // (reading 'map')") — we only need each group's id and name.
         const configuredGroups = config.GROUP_NAMES || [];
-        targetChats = chats.filter((c) => c.isGroup && c.name && configuredGroups.includes(c.name.trim()));
+        const { groups, available } = await groupReactions.resolveTargetGroups(configuredGroups);
+        targetChats = groups;
 
         if (targetChats.length === 0) {
             console.error(`❌ No target groups found from your configuration: ${configuredGroups.join(', ')}`);
             console.error(`   Available groups you are in:`);
-            chats.filter((c) => c.isGroup).forEach((c) => console.log(`   • ${c.name}`));
+            available.forEach((c) => console.log(`   • ${c.name || '(unnamed)'}`));
             console.error('\nPlease update GROUP_NAME in Setting.txt and restart.');
             return;
         }
 
         console.log(`🎯 Target groups found (${targetChats.length}):`);
-        targetChats.forEach((c) => console.log(`   • "${c.name}" (${c.id._serialized})`));
+        targetChats.forEach((c) => console.log(`   • "${c.name}" (${c.id})`));
         console.log('');
 
         startScheduler(
             async (text) => {
                 for (const chat of targetChats) {
                     try {
-                        await client.sendMessage(chat.id._serialized, text);
+                        const sent = await client.sendMessage(chat.id, text);
+                        // Remember exactly what we posted so reactions never have to
+                        // rediscover it by re-reading history later.
+                        groupReactions.trackSentMessage(sent, chat.id);
                     } catch (err) {
                         console.error(`❌ [Main] Failed to send scheduled message to ${chat.name}:`, err.message);
                     }
@@ -319,8 +327,15 @@ client.on('message_create', async (msg) => {
 
 client.on('message_edit', async (msg, newBody, prevBody) => {
     try {
-        console.log(`[Diagnostic] message_edit triggered. newBody: "${newBody}", msg.body: "${msg.body}", msg.type: "${msg.type}"`);
-        if (newBody) msg.body = newBody; // Ensure body is updated
+        const normalizedNewBody = typeof newBody === 'string' ? newBody.trim() : '';
+        const normalizedPrevBody = typeof prevBody === 'string' ? prevBody.trim() : '';
+        const normalizedCurrentBody = typeof msg.body === 'string' ? msg.body.trim() : '';
+
+        if (!normalizedNewBody || (normalizedNewBody === normalizedPrevBody && normalizedNewBody === normalizedCurrentBody)) {
+            return;
+        }
+
+        msg.body = newBody; // Ensure body is updated
 
 
 
