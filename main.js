@@ -1,4 +1,5 @@
 'use strict';
+process.env.TZ = 'Asia/Kolkata';
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = function patchedEmitWarning(warning, ...args) {
