@@ -20,7 +20,7 @@ MEAL_DINNER_START=19:30
 MEAL_DINNER_END=21:30
 
 # ─── Seller Info ────────────────────────────────────────────────
-UPI_ID=mveen3@oksbi
+UPI_ID=mveen@upi
 PHONE_NUMBER=8948966418
 QR_IMAGE_PATH=utils/qr.png
 
@@ -41,7 +41,7 @@ BUYER_INACTIVITY_MS=90000
 BUYER_TIMEOUT_WARNING_MS=30000
 
 # ─── Keywords ───────────────────────────────────────────────────
-BUYER_KEYWORDS=buy, want, wants, available, available?, interested, need, qr, breakfast, sold, wanna, is it there, kharidna, chahiye, chaiye, dedo, bhejo, bhej
+BUYER_KEYWORDS=buy, want, wants, available, available?, interested, need, qr, breakfast, sold, wanna, is it there, kharidna, chahiye, chaiye, dedo, bhejo, bhej, take
 DONE_KEYWORDS=done, paid, sent, pay, kar diya
 
 # ─── Message Templates ──────────────────────────────────────────
