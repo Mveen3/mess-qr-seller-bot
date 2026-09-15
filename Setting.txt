@@ -9,7 +9,7 @@ TESTING=false
 TESTING_GROUP_NAME=temp1, temp2
 
 # ─── Target Group ───────────────────────────────────────────────
-GROUP_NAME=Mess Buy Sell @ IIITH, Mess Buy Sell @ Open Community IIITH, Mess Buy Sell @ IIITH - 2, Mess Buy Sell - 2 @ IIITH
+GROUP_NAME=Mess Buy Sell @ IIITH, Mess Buy Sell @ Open Community IIITH, Mess Buy Sell @ IIITH - 2, Mess Buy Sell - 2 @ IIITH, Mess buy and sell 2.0
 
 # ─── Meal Timings ───────────────────────────────────────────────
 MEAL_BREAKFAST_START=07:30
