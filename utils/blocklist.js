@@ -64,16 +64,10 @@ function widToNumber(wid) {
 
 // ─── Default file ───────────────────────────────────────────
 
-const DEFAULT_BLOCKLIST_TEMPLATE = `phone,name,reason
-# Blocked numbers — messages from these people are ignored completely.
-# No reply, no read receipt, no queue slot, not counted in the sale report.
-#
-# Examples:
-#   8946893829,Spammer,Unwanted messages
-#   +91-8946893829,Tester,Testing bot
-#
-# Formatting for numbers is forgiving — country codes (+91), spaces, and dashes are stripped.
-# Edits take effect within ~5 seconds without restarting.
+const DEFAULT_BLOCKLIST_TEMPLATE = `# Blocked numbers — messages from these people are ignored completely.
+# One number per line (+91/spaces/dashes are stripped) eg:
+# 1234567890
+# +91-1234567890
 `;
 
 /** Create blocklist.csv in utils/ from template if it isn't there yet. */
