@@ -174,6 +174,9 @@ const settings = {
 
     BUYER_KEYWORDS: getList(raw, 'BUYER_KEYWORDS'),
     DONE_KEYWORDS: getList(raw, 'DONE_KEYWORDS'),
+
+    LOYALTY_TARGET: getNumber(raw, 'LOYALTY_TARGET') || 170,
+    LOYALTY_CSV_PATH: resolveProjectPath(getText(raw, 'LOYALTY_CSV_PATH')) || resolveProjectPath('utils/purchases.csv'),
 };
 
 // ─── Template message functions ─────────────────────────────
@@ -192,16 +195,28 @@ settings.unrecognizedMessage = () => getText(raw, 'UNRECOGNIZED_MESSAGE');
 settings.timeoutWarningMessage = () => getText(raw, 'TIMEOUT_WARNING_MESSAGE');
 settings.timeoutFinalMessage = () => getText(raw, 'TIMEOUT_FINAL_MESSAGE');
 
-settings.saleConfirmMessage = (buyerName, mealType) =>
-    applyTemplate(getText(raw, 'SALE_CONFIRM_MESSAGE'), { buyerName, mealType });
+settings.saleConfirmMessage = (buyerName, mealType, loyaltyStatus = '') =>
+    applyTemplate(getText(raw, 'SALE_CONFIRM_MESSAGE'), { buyerName, mealType, loyaltyStatus });
+
+settings.freeMealAssignMessage = (buyerName = '', mealType = '') =>
+    applyTemplate(getText(raw, 'FREE_MEAL_ASSIGN_MESSAGE'), { buyerName, mealType });
+
+settings.freeMealConfirmMessage = (buyerName, mealType) =>
+    applyTemplate(getText(raw, 'FREE_MEAL_CONFIRM_MESSAGE'), { buyerName, mealType });
+
+settings.loyaltyProgressMessage = (totalSpent, target, remaining) =>
+    applyTemplate(getText(raw, 'LOYALTY_PROGRESS_TEMPLATE'), { totalSpent, target, remaining });
+
+settings.loyaltyReachedMessage = (target) =>
+    applyTemplate(getText(raw, 'LOYALTY_REACHED_TEMPLATE'), { target });
 
 settings.testRevertedMessage = () => getText(raw, 'TEST_REVERTED_MESSAGE');
 
 settings.negotiationAcceptedMessage = (price) =>
     applyTemplate(getText(raw, 'NEGOTIATION_ACCEPTED_MESSAGE'), { price });
 
-settings.payViaPhoneMessage = (price, phone) =>
-    applyTemplate(getText(raw, 'PAY_VIA_PHONE_MESSAGE'), { price, phone });
+settings.payViaPhoneMessage = (price, phone, upi = settings.UPI_ID) =>
+    applyTemplate(getText(raw, 'PAY_VIA_PHONE_MESSAGE'), { price, phone, UPI: upi, upi });
 
 // ─── Runtime overrides (from CLI menu) ──────────────────────
 

@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const BLOCKLIST_FILE_PATH = path.resolve(PROJECT_ROOT, 'mess-blocklist.txt');
+const BLOCKLIST_FILE_PATH = path.resolve(__dirname, 'blocklist.csv');
 
 // Re-stat the file at most this often so edits take effect without a restart.
 const RELOAD_CHECK_INTERVAL_MS = 5000;
@@ -64,31 +64,25 @@ function widToNumber(wid) {
 
 // ─── Default file ───────────────────────────────────────────
 
-// mess-blocklist.txt is git-ignored, so a fresh clone won't have one. Rather
-// than silently blocking nobody, we write this self-documenting template on
-// startup and let the user fill it in.
-const DEFAULT_BLOCKLIST_TEMPLATE = `# Blocked numbers — messages from these people are ignored completely.
+const DEFAULT_BLOCKLIST_TEMPLATE = `phone,name,reason
+# Blocked numbers — messages from these people are ignored completely.
 # No reply, no read receipt, no queue slot, not counted in the sale report.
 #
-# One number per line, 10 digits:
-#   8946893829
+# Examples:
+#   8946893829,Spammer,Unwanted messages
+#   +91-8946893829,Tester,Testing bot
 #
-# Formatting is forgiving — country codes, +, -, spaces and brackets are
-# stripped before matching, so all of these mean the same person:
-#   +91-8946893829   /   89468 93829   /   894-6893829   /   918946893829
-#
-# Lines starting with # are comments. Edits take effect within ~5 seconds,
-# no restart needed.
-
+# Formatting for numbers is forgiving — country codes (+91), spaces, and dashes are stripped.
+# Edits take effect within ~5 seconds without restarting.
 `;
 
-/** Create mess-blocklist.txt from the template if it isn't there yet. */
+/** Create blocklist.csv in utils/ from template if it isn't there yet. */
 function ensureBlocklistFile() {
     try {
         if (fs.existsSync(BLOCKLIST_FILE_PATH)) return false;
 
         fs.writeFileSync(BLOCKLIST_FILE_PATH, DEFAULT_BLOCKLIST_TEMPLATE, 'utf8');
-        console.log(`📝 [Blocklist] Created ${path.basename(BLOCKLIST_FILE_PATH)} in the project root — add numbers you want ignored, one per line.`);
+        console.log(`📝 [Blocklist] Created ${path.basename(BLOCKLIST_FILE_PATH)} in utils/ — add numbers you want ignored.`);
         return true;
     } catch (err) {
         console.error('❌ [Blocklist] Could not create blocklist file:', err.message);
@@ -109,7 +103,17 @@ function parseBlocklistFile(filePath) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) return;
 
-        const normalized = normalizeNumber(trimmed);
+        // Skip CSV header line if present
+        if (index === 0 && trimmed.toLowerCase().startsWith('phone')) return;
+
+        // Extract first column as phone number
+        const commaIndex = trimmed.indexOf(',');
+        const rawPhone = commaIndex === -1 ? trimmed : trimmed.slice(0, commaIndex).trim();
+        const cleanPhone = rawPhone.replace(/^["']|["']$/g, '').trim();
+
+        if (cleanPhone.toLowerCase() === 'phone') return;
+
+        const normalized = normalizeNumber(cleanPhone);
         if (normalized) {
             numbers.add(normalized);
         } else {

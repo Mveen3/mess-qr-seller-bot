@@ -9,10 +9,11 @@ const { isBlockedWid, isBlockedContact } = require('./blocklist');
 const { extractPrice } = require('./priceParser');
 const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
 const groupReactions = require('./groupReactions');
+const loyalty = require('./loyalty');
 
 // ─── State ──────────────────────────────────────────────────
 let sold = false;
-let currentBuyer = null;       // { id, name, chatId, chat, assignedAt }
+let currentBuyer = null;       // { id, name, phone, isFreeMeal, chatId, chat, assignedAt }
 let queueTimer = null;         // Timer that triggers moving to next buyer
 let queueWarningTimer = null;  // Timer that warns current buyer before timeout
 let reactOwnGroupMessages = false;
@@ -25,6 +26,8 @@ let stats = {
     buyerName: null,
     buyerId: null,
     timeSold: null,
+    isFreeMeal: false,
+    loyaltyRecord: null,
 };
 
 function isSold() { return sold; }
@@ -140,9 +143,16 @@ async function handleMessage(msg, client) {
             const doneKeyword = isDoneKeyword(body);
             const paymentSignal = isPaymentSignal(msg, price);
             const whatsappPaySignal = isWhatsAppPaySignal(msg);
+            const freeMealClaimKeyword = currentBuyer.isFreeMeal && (
+                doneKeyword ||
+                isBuyerKeyword(body) ||
+                /^(ok|yes|claim|free|qr|dedo|bhejo|haan|send)$/i.test(body.trim())
+            );
 
-            if (whatsappPaySignal || msg.hasMedia || doneKeyword || paymentSignal) {
-                if (whatsappPaySignal) {
+            if (whatsappPaySignal || msg.hasMedia || doneKeyword || paymentSignal || freeMealClaimKeyword) {
+                if (currentBuyer.isFreeMeal) {
+                    console.log(`🎁 [Loyalty] Free meal claim signal from ${senderName}: "${body}"`);
+                } else if (whatsappPaySignal) {
                     console.log(`💳 [Handler] WhatsApp Pay signal detected for ${senderName}.`);
                 } else if (paymentSignal) {
                     console.log(`💳 [Handler] Payment signal detected for ${senderName} (type: ${msg.type || 'unknown'}).`);
@@ -169,7 +179,7 @@ async function handleMessage(msg, client) {
         const buyerKw = isBuyerKeyword(body);
         if (buyerKw) {
             console.log(`🎯 [Handler] Buyer intent triggered by keyword: "${buyerKw}"`);
-            await handleBuyerIntent(chat, senderId, senderName, client);
+            await handleBuyerIntent(chat, senderId, senderName, client, contact);
             return;
         }
 
@@ -188,7 +198,7 @@ async function handleMessage(msg, client) {
 //  BUYER INTENT
 // ═══════════════════════════════════════════════════════════════
 
-async function handleBuyerIntent(chat, senderId, senderName, client) {
+async function handleBuyerIntent(chat, senderId, senderName, client, contact = null) {
     // Already the current buyer
     if (currentBuyer && currentBuyer.id === senderId) {
         console.log(`ℹ️  [Handler] ${senderName} is already the current buyer.`);
@@ -197,7 +207,7 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
 
     // No current buyer → assign directly
     if (!currentBuyer) {
-        await assignBuyer(chat, senderId, senderName);
+        await assignBuyer(chat, senderId, senderName, contact);
         return;
     }
 
@@ -208,7 +218,7 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
         // ── Within 90s window → queue new buyer and schedule timeout ──
         const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
         if (!alreadyQueued) {
-            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
+            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact });
             console.log(`🔢 [Handler] ${senderName} queued (position ${buyerQueue.length}).`);
         }
 
@@ -219,7 +229,7 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
 
         const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
         if (!alreadyQueued) {
-            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized });
+            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact });
         }
 
         await moveNextBuyer();
@@ -230,26 +240,34 @@ async function handleBuyerIntent(chat, senderId, senderName, client) {
 //  ASSIGN BUYER
 // ═══════════════════════════════════════════════════════════════
 
-async function assignBuyer(chat, senderId, senderName) {
+async function assignBuyer(chat, senderId, senderName, contact = null) {
+    const buyerPhone = loyalty.resolveBuyerPhone(contact, senderId);
+    const freeEligible = loyalty.isFreeMealEligible(config.LOYALTY_CSV_PATH, buyerPhone, config.LOYALTY_TARGET);
+
     currentBuyer = {
         id: senderId,
         name: senderName,
+        phone: buyerPhone,
+        isFreeMeal: freeEligible,
         chatId: chat.id._serialized,
         chat,
         assignedAt: Date.now(),
     };
-    console.log(`🛒 [Handler] Buyer assigned: ${senderName}`);
+    console.log(`🛒 [Handler] Buyer assigned: ${senderName} (id: ${buyerPhone}, freeEligible: ${freeEligible})`);
 
     try {
-        await chat.sendMessage(config.UPI_ID);
-        console.log('📤 [Handler] UPI ID sent.');
+        if (freeEligible) {
+            await chat.sendMessage(config.freeMealAssignMessage(senderName, getCurrentMeal()));
+            console.log('🎁 [Loyalty] Sent free meal claim prompt to buyer.');
+        } else {
+            const price = getCurrentPrice();
+            const safePrice = Number.isFinite(price) && price > 0 ? price : config.DEFAULT_PRICE;
+            await chat.sendMessage(config.payViaPhoneMessage(safePrice, config.PHONE_NUMBER, config.UPI_ID));
+            console.log('📤 [Handler] Payment details sent.');
 
-        const price = getCurrentPrice();
-        const safePrice = Number.isFinite(price) && price > 0 ? price : config.DEFAULT_PRICE;
-        await chat.sendMessage(config.payViaPhoneMessage(safePrice, config.PHONE_NUMBER));
-
-        await chat.sendMessage(config.paymentInstructionMessage());
-        console.log('📤 [Handler] Payment instruction sent.');
+            await chat.sendMessage(config.paymentInstructionMessage());
+            console.log('📤 [Handler] Payment instruction sent.');
+        }
     } catch (err) {
         console.error('❌ [Handler] Error sending buyer messages:', err.message);
     }
@@ -362,7 +380,7 @@ async function tryNextBuyer() {
 
     try {
         const chat = await globalClient.getChatById(next.chatId);
-        await assignBuyer(chat, next.id, next.name);
+        await assignBuyer(chat, next.id, next.name, next.contact || null);
     } catch (err) {
         console.error('❌ [Handler] Error assigning next buyer:', err.message);
         await tryNextBuyer();
@@ -416,7 +434,12 @@ async function completeSale(chat, buyerName) {
     sold = true;
     reactOwnGroupMessages = true;
     allowTestingRevert = true;
-    stats.soldPrice = getCurrentPrice();
+    const isFree = Boolean(currentBuyer && currentBuyer.isFreeMeal);
+    const activePrice = getCurrentPrice();
+    const buyerPhone = currentBuyer?.phone || loyalty.resolveBuyerPhone(null, stats.buyerId);
+
+    stats.isFreeMeal = isFree;
+    stats.soldPrice = isFree ? 0 : activePrice;
     stats.buyerName = buyerName;
     stats.buyerId = currentBuyer ? currentBuyer.id : null;
     stats.timeSold = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -424,7 +447,7 @@ async function completeSale(chat, buyerName) {
     clearAllTimers();
     stopScheduler();
 
-    console.log(`\n🎉 [Handler] SOLD to ${buyerName}!`);
+    console.log(`\n🎉 [Handler] SOLD to ${buyerName}! (Free Meal: ${isFree})`);
 
     try {
         if (fs.existsSync(config.QR_IMAGE_PATH)) {
@@ -435,7 +458,39 @@ async function completeSale(chat, buyerName) {
             console.warn('⚠️  [Handler] QR image not found at', config.QR_IMAGE_PATH);
         }
 
-        await chat.sendMessage(config.saleConfirmMessage(buyerName, getCurrentMeal()));
+        if (isFree) {
+            const claimResult = loyalty.claimFreeMeal(config.LOYALTY_CSV_PATH, buyerPhone, buyerName);
+            stats.loyaltyRecord = {
+                phone: buyerPhone,
+                wasFreeMeal: true,
+                amount: 0,
+                previousTotal: claimResult.previousTotal,
+            };
+            await chat.sendMessage(config.freeMealConfirmMessage(buyerName, getCurrentMeal()));
+            console.log(`🎁 [Loyalty] FREE meal delivered to ${buyerName}. Total purchases reset to 0 in CSV.`);
+        } else {
+            const finalPrice = Number.isFinite(stats.soldPrice) && stats.soldPrice > 0 ? stats.soldPrice : config.DEFAULT_PRICE;
+            const purchaseResult = loyalty.recordPurchase(
+                config.LOYALTY_CSV_PATH,
+                buyerPhone,
+                buyerName,
+                finalPrice,
+                config.LOYALTY_TARGET
+            );
+            stats.loyaltyRecord = {
+                phone: buyerPhone,
+                wasFreeMeal: false,
+                amount: finalPrice,
+                previousTotal: purchaseResult.previousTotal,
+            };
+
+            const loyaltyStatus = purchaseResult.isFreeNext
+                ? config.loyaltyReachedMessage(config.LOYALTY_TARGET)
+                : config.loyaltyProgressMessage(purchaseResult.newTotal, config.LOYALTY_TARGET, purchaseResult.remaining);
+
+            await chat.sendMessage(config.saleConfirmMessage(buyerName, getCurrentMeal(), loyaltyStatus));
+            console.log(`💳 [Loyalty] Purchase recorded: ₹${finalPrice} for ${buyerName}. New total: ₹${purchaseResult.newTotal}/${config.LOYALTY_TARGET}.`);
+        }
     } catch (err) {
         console.error('❌ [Handler] Error sending sold confirmation:', err.message);
     }
@@ -450,10 +505,18 @@ async function revertSale(chat, buyerName) {
     reactOwnGroupMessages = false;
     allowTestingRevert = true;
     await removeAllTrackedReactions();
+
+    if (stats.loyaltyRecord) {
+        loyalty.revertBuyerAction(config.LOYALTY_CSV_PATH, stats.loyaltyRecord.phone, stats.loyaltyRecord);
+        console.log(`🔄 [Loyalty] Reverted loyalty update for ${stats.loyaltyRecord.phone}.`);
+        stats.loyaltyRecord = null;
+    }
+
     stats.soldPrice = null;
     stats.buyerName = null;
     stats.buyerId = null;
     stats.timeSold = null;
+    stats.isFreeMeal = false;
 
     console.log(`\n⏪ [Handler] UNSOLD — ${buyerName} was just testing.`);
 
@@ -477,6 +540,9 @@ function handleUnsoldStop() {
 function printReport() {
     const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
     const wasSold = stats.soldPrice !== null;
+    const soldPriceDisplay = wasSold
+        ? (stats.isFreeMeal ? '₹0 (Free Meal)' : '₹' + stats.soldPrice)
+        : '—';
 
     console.log(`
 ═════════════════════════════════════════════
@@ -484,7 +550,7 @@ function printReport() {
 ═════════════════════════════════════════════
   Date:              ${date.padEnd(14)}     
   Sold:              ${(wasSold ? 'Yes' : 'No').padEnd(14)}     
-  Sold Price:        ${(wasSold ? '₹' + stats.soldPrice : '—').padEnd(14)}
+  Sold Price:        ${soldPriceDisplay.padEnd(14)}
   Buyer Name:        ${(stats.buyerName || '—').padEnd(14)}     
   Time Sold:         ${(stats.timeSold || '—').padEnd(14)}     
   Messages Received: ${String(stats.messagesReceived).padEnd(14)}     

@@ -1,7 +1,8 @@
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+utils/blocklist.csv
+utils/purchases.csv
+utils/*.png
 upcoming_features.txt
 error.log
-.codex
-mess-blocklist.txt

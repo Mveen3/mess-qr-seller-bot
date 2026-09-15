@@ -387,7 +387,7 @@ process.on('SIGINT', async () => {
 
 // ─── Start ──────────────────────────────────────────────────
 (async () => {
-    // Runs before the menu so mess-blocklist.txt is created (if missing) and
+    // Runs before the menu so utils/blocklist.csv is created (if missing) and
     // ready to edit well before the bot connects.
     loadBlocklist();
 
