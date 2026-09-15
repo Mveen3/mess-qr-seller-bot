@@ -123,6 +123,7 @@ function loadRecords(filePath) {
         try {
             fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
             fs.writeFileSync(resolvedPath, CSV_HEADER, 'utf8');
+            console.log(`📝 [Loyalty] Created ${path.basename(resolvedPath)} in ${path.dirname(resolvedPath)}/ with headers.`);
         } catch (err) {
             console.error(`❌ [Loyalty] Error initializing CSV at ${resolvedPath}:`, err.message);
         }
@@ -292,4 +293,5 @@ module.exports = {
     recordPurchase,
     claimFreeMeal,
     revertBuyerAction,
+    ensureLoyaltyFile: loadRecords,
 };

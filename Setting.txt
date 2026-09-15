@@ -5,7 +5,7 @@
 
 
 # ─── For Testing ────────────────────────────────────────────────
-TESTING=true
+TESTING=false
 TESTING_GROUP_NAME=temp1, temp2
 
 # ─── Target Group ───────────────────────────────────────────────

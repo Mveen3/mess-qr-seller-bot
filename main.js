@@ -19,6 +19,7 @@ const { showMenu } = require('./utils/menu');
 const { startScheduler, stopScheduler } = require('./utils/priceScheduler');
 const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClient } = require('./utils/messageHandler');
 const { loadBlocklist, getBlockedNumbers } = require('./utils/blocklist');
+const loyalty = require('./utils/loyalty');
 const groupReactions = require('./utils/groupReactions');
 
 
@@ -387,9 +388,10 @@ process.on('SIGINT', async () => {
 
 // ─── Start ──────────────────────────────────────────────────
 (async () => {
-    // Runs before the menu so utils/blocklist.csv is created (if missing) and
-    // ready to edit well before the bot connects.
+    // Runs before the menu so utils/blocklist.csv and utils/purchases.csv are created (if missing)
+    // and ready to edit well before the bot connects.
     loadBlocklist();
+    loyalty.ensureLoyaltyFile(config.LOYALTY_CSV_PATH);
 
     runOpts = await showMenu();
 
