@@ -49,7 +49,7 @@ LOYALTY_TARGET=180
 LOYALTY_CSV_PATH=utils/purchases.csv
 FREE_MEAL_ASSIGN_MESSAGE=🎉 Congratulations {buyerName}! You earned a FREE meal! Don't pay anything, just reply *DONE* to get the QR, 
 FREE_MEAL_CONFIRM_MESSAGE=Enjoy your FREE {mealType}, {buyerName}!\nYour total spent reset to ₹0\n\n_Reply *TESTING* if you're not claiming the free meal today_
-LOYALTY_PROGRESS_TEMPLATE=You total spent: ₹{totalSpent}/₹{target} (₹{remaining} left for a free meal from my side)
+LOYALTY_PROGRESS_TEMPLATE=Your total spent: ₹{totalSpent}/₹{target} (₹{remaining} left for a free meal from my side)
 LOYALTY_REACHED_TEMPLATE=🎉 Your total spent crossed ₹{target}! Next meal is FREE from my side!
 
 # ─── Message Templates ──────────────────────────────────────────
