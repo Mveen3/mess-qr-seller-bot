@@ -75,6 +75,40 @@ function unescapeCsvField(field) {
 }
 
 /**
+ * Format current date (or given date) as DD/MM/YYYY in Asia/Kolkata timezone.
+ */
+function getTodayDateFormatted(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).formatToParts(date);
+
+    const day = parts.find((p) => p.type === 'day')?.value || '';
+    const month = parts.find((p) => p.type === 'month')?.value || '';
+    const year = parts.find((p) => p.type === 'year')?.value || '';
+    return `${day}/${month}/${year}`;
+}
+
+/**
+ * Normalize any date string to DD/MM/YYYY without time.
+ */
+function normalizeDateStr(value) {
+    if (!value || typeof value !== 'string') return getTodayDateFormatted();
+    // Strip time portion if present (e.g. "16/9/2026, 3:07:01 pm" -> "16/9/2026")
+    const datePart = value.split(',')[0].trim();
+    const parts = datePart.split('/');
+    if (parts.length === 3) {
+        const d = parts[0].padStart(2, '0');
+        const m = parts[1].padStart(2, '0');
+        const y = parts[2];
+        return `${d}/${m}/${y}`;
+    }
+    return datePart;
+}
+
+/**
  * Parse lines of a CSV file.
  */
 function parseCsv(content) {
@@ -107,7 +141,7 @@ function parseCsv(content) {
             const phone = unescapeCsvField(tokens[0]);
             const name = unescapeCsvField(tokens[1]);
             const totalSpent = Number(unescapeCsvField(tokens[2])) || 0;
-            const lastUpdated = tokens[3] ? unescapeCsvField(tokens[3]) : '';
+            const lastUpdated = tokens[3] ? normalizeDateStr(unescapeCsvField(tokens[3])) : getTodayDateFormatted();
             rows.push({ phone, name, totalSpent, lastUpdated });
         }
     }
@@ -181,7 +215,7 @@ function recordPurchase(filePath, phoneOrId, name, amount, target = 170) {
     const records = loadRecords(filePath);
     const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
     const purchaseAmount = Math.max(0, Number(amount) || 0);
-    const nowStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const nowStr = getTodayDateFormatted();
 
     let buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
     const previousTotal = buyer ? buyer.totalSpent : 0;
@@ -224,7 +258,7 @@ function recordPurchase(filePath, phoneOrId, name, amount, target = 170) {
 function claimFreeMeal(filePath, phoneOrId, name) {
     const records = loadRecords(filePath);
     const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
-    const nowStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const nowStr = getTodayDateFormatted();
 
     let buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
     const previousTotal = buyer ? buyer.totalSpent : 0;
@@ -259,7 +293,7 @@ function claimFreeMeal(filePath, phoneOrId, name) {
 function revertBuyerAction(filePath, phoneOrId, { wasFreeMeal, amount, previousTotal }) {
     const records = loadRecords(filePath);
     const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
-    const nowStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const nowStr = getTodayDateFormatted();
 
     const buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
     if (!buyer) return;
@@ -286,6 +320,8 @@ module.exports = {
     normalizePhoneNumber,
     widToPhoneNumber,
     resolveBuyerPhone,
+    getTodayDateFormatted,
+    normalizeDateStr,
     loadRecords,
     saveRecords,
     getBuyer,
