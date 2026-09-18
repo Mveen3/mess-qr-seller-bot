@@ -21,7 +21,6 @@ MEAL_DINNER_END=21:30
 
 # ─── Seller Info ────────────────────────────────────────────────
 UPI_ID=mveen@upi
-PHONE_NUMBER=8948966418
 QR_IMAGE_PATH=utils/qr.png
 
 # ─── Defaults ───────────────────────────────────────────────────
@@ -62,5 +61,7 @@ TIMEOUT_FINAL_MESSAGE=Moved to next buyer. Reply *WANTS* if still interested
 SALE_CONFIRM_MESSAGE=Enjoy your {mealType}, {buyerName}!\n{loyaltyStatus}\n\n_Reply *TESTING* if not buying_
 TEST_REVERTED_MESSAGE=Got it! Thanks for letting me know
 NEGOTIATION_ACCEPTED_MESSAGE=✅ ₹{price} accepted!
-PAY_VIA_PHONE_MESSAGE=Pay ₹{price} to same no ie {phone} or {UPI}
+NEGOTIATION_DISABLED_MESSAGE=Sorry, price is fixed at ₹{price}. _negotiation is not possible_.
+NEGOTIATION_COUNTER_OFFER_MESSAGE=I can accept up to ₹{price} for this meal.
+PAY_VIA_PHONE_MESSAGE=Pay ₹{price} to same number or {UPI}
 

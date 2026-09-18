@@ -1,88 +1,90 @@
-# Mess QR Selling Bot
+# 🍽️ Mess QR Selling Bot
 
-WhatsApp automation bot for selling mess QR slots with scheduled price drops, DM buyer handling, and queue management.
+Automated WhatsApp bot for selling mess meal QR codes with scheduled price drops, interactive DM buyer queues, smart negotiation, and loyalty rewards.
 
-## Features
+---
 
-1. Scheduled group posts for breakfast/lunch/dinner windows.
-2. Dynamic price drops across configured message slots.
-3. Buyer intent detection from DM keywords.
-4. Buyer queue with inactivity timeout and warning message.
-5. Optional negotiation mode with configurable margin.
-6. Auto-complete sale on WhatsApp Pay signal, payment screenshot, or `DONE` keyword.
-7. ✅ reactions on group sell messages when sold; removed on `TESTING` revert.
-8. QR delivery + sale confirmation + report after successful sale.
-9. `TESTING` revert for the actual buyer to mark the QR unsold and restart scheduler.
-10. Blocklist to fully ignore chosen numbers.
+## ⚡ Features
 
-## How It Works
+- **Scheduled Group Drops**: Automatically posts sell messages to target groups across configured meal intervals with dropping prices.
+- **Smart Negotiation**:
+  - **Negotiation ON**: Automatically accepts offers within margin or counter-offers the minimum acceptable price with payment instructions.
+  - **Negotiation OFF**: Politely informs the buyer that price is fixed and sends payment instructions.
+- **Instant Sale Completion**: Completes automatically on **WhatsApp Pay**, **payment screenshot**, or **DONE** keyword.
+- **Resilient QR Delivery**: Delivers QR directly via active chat with automatic format fallbacks and WhatsApp Web memoization shields.
+- **Group Message Reactions**: Marks group sell messages with ✅ when sold; cleans them up automatically if reverted via `TESTING`.
+- **Loyalty / Free Meal System**: Tracks buyer spend in CSV; automatically awards a free meal once the loyalty threshold is reached.
+- **Live Blocklist**: Completely ignores blocked numbers; auto-reloads changes without restarting.
 
-1. Bot sends sell messages in the target group at scheduled intervals with dropping prices.
-2. When a buyer DMs a keyword like "buy", "want", etc., the bot assigns them and sends UPI/phone details.
-3. Sale completes automatically when the buyer:
-   - Sends payment via **WhatsApp Pay** (detected instantly).
-   - Sends a **photo/screenshot** (assumed payment proof).
-   - Replies with **DONE** or any payment confirmation keyword.
-4. On sale completion, the bot sends the QR image, confirms the sale, and adds ✅ reactions to group sell messages.
-5. If the buyer replies with **TESTING**, the sale is reverted, ✅ reactions are removed, and the scheduler restarts.
+---
 
-## Project Structure
+## 🚀 Quick Start
 
-- `main.js`: Client bootstrap, auth lifecycle, scheduler startup, message routing.
-- `Setting.txt`: All runtime configuration (the single source of truth).
-- `utils/config.js`: Reads and parses `Setting.txt`, exposes settings and message template functions.
-- `utils/menu.js`: Interactive CLI setup prompts (price, meal, mess, negotiation, message count).
-- `utils/priceScheduler.js`: Timed posting and auto-stop logic.
-- `utils/messageHandler.js`: DM flow, buyer queueing, sale completion, reaction management.
-- `utils/keywordMatcher.js`: Buyer/done intent matching.
-- `utils/priceParser.js`: Price extraction from negotiation messages.
-- `utils/blocklist.js`: Reads `mess-blocklist.txt` and normalises numbers for matching.
-- `mess-blocklist.txt`: Numbers to ignore (git-ignored, auto-created on first run).
-- `utils/`: Directory where the bot automatically looks for your QR image (any `.png`, `.jpg`, `.jpeg`).
-
-## Setup
-
-1. Install Node.js 18 or newer.
-2. Install dependencies:
-
+### 1. Requirements & Install
+- **Node.js 18+**
 ```bash
 npm install
 ```
 
-3. Drop your QR image (any `.png`, `.jpg`, `.jpeg`) into the `utils/` folder. The bot will automatically find it!.
-4. Update key values in `Setting.txt`: `GROUP_NAME`, `UPI_ID`, `PHONE_NUMBER`, `MESS_NAMES`, `DEFAULT_PRICE`.
+### 2. Add Your QR Code
+Drop your mess QR image (`.png`, `.jpg`, or `.jpeg`) into the `utils/` folder (e.g. `utils/qr.png`).
 
-## Run
+### 3. Configure
+Edit `Setting.txt` to set your groups, meal times, prices, and UPI ID:
+- `GROUP_NAME`: Comma-separated target group names.
+- `UPI_ID`: Your UPI ID for payments.
+- `DEFAULT_PRICE` & `PRICE_DROP`: Starting price and step decrement.
 
+### 4. Run
 ```bash
 node main.js
 ```
+- First run: Scan the WhatsApp Web QR in your terminal.
+- Use interactive menu to choose meal type, mess, price, and negotiation.
 
-At startup:
+---
 
-1. Configure settings (price, negotiation, meal, mess, number of messages).
-2. On first login, scan the WhatsApp QR in terminal.
-3. Bot loads groups, starts scheduler, and listens to DMs.
+## 🎁 Free Meal / Loyalty Program
 
-## Blocklist
+The bot tracks customer loyalty automatically in `utils/purchases.csv`:
 
-Numbers in `mess-blocklist.txt` (project root) are ignored completely — no reply, no read receipt, no queue slot, not counted in the report.
+- **How it works**: Every successful purchase logs `phone,name,total_spent,last_updated`.
+- **Free Meal Trigger**: When a buyer's `total_spent` reaches or crosses `LOYALTY_TARGET` (default ₹180):
+  - Their next meal is **100% FREE**.
+  - The bot alerts them not to pay and claim the QR directly by replying `DONE`.
+  - Once claimed, their `total_spent` resets to ₹0.
+- **Testing Revert**: If the buyer was just testing and sends `TESTING`, the purchase is reverted and their previous spend is restored.
 
-The file is git-ignored and **created automatically on first run**, so just open it and add numbers — one per line:
+---
 
-```
-1234567890
-0987654321
-```
+## ⛔ Blocklist
 
-## Important Config Flags
+Manage blocked contacts in `utils/blocklist.csv`:
 
-- `BUYER_INACTIVITY_MS=90000` — Time before moving to the next buyer.
-- `BUYER_TIMEOUT_WARNING_MS=30000` — Warning sent before timeout.
-- `ENABLE_NEGOTIATION=true|false` — Allow price negotiation via DM.
-- `NEGOTIATION_MARGIN=5` — Max discount below current price.
-- `PRICE_DROP=5` — Price drop between scheduled messages.
+- **Format**: Add phone numbers one per line. Spaces, dashes, and `+91` are automatically normalized:
+  ```csv
+  # Blocked numbers (one per line)
+  9876543210
+  +91-9123456789
+  ```
+- **Behavior**: Blocked users are completely ignored (no replies, no queueing, no stats impact).
+- **Hot-Reload**: The file is re-checked every 5 seconds — updates apply immediately without restarting the bot.
 
-## Stop
+---
 
-Press `Ctrl+C` to stop gracefully.
+## ⚙️ Key Configuration (`Setting.txt`)
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `ENABLE_NEGOTIATION` | Enable price bargaining in DMs (`true`/`false`) | `false` |
+| `NEGOTIATION_MARGIN` | Maximum discount acceptable below current price | `5` |
+| `BUYER_INACTIVITY_MS` | Buyer checkout timeout window | `90000` (90s) |
+| `BUYER_TIMEOUT_WARNING_MS` | Timeout reminder warning window | `30000` (30s) |
+| `LOYALTY_TARGET` | Total spend required to earn a free meal | `180` |
+| `TESTING` | Bypass meal schedule timers for instant testing | `false` |
+
+---
+
+## 🛑 Stop
+
+Press `Ctrl + C` in terminal for graceful shutdown and timer cleanup.

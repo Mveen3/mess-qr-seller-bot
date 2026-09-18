@@ -140,7 +140,6 @@ const settings = {
     })(),
 
     UPI_ID: getText(raw, 'UPI_ID'),
-    PHONE_NUMBER: getText(raw, 'PHONE_NUMBER'),
     QR_IMAGE_PATH: resolveQRImagePath(raw.QR_IMAGE_PATH),
 
     MEAL_TIMINGS: {
@@ -215,8 +214,19 @@ settings.testRevertedMessage = () => getText(raw, 'TEST_REVERTED_MESSAGE');
 settings.negotiationAcceptedMessage = (price) =>
     applyTemplate(getText(raw, 'NEGOTIATION_ACCEPTED_MESSAGE'), { price });
 
-settings.payViaPhoneMessage = (price, phone, upi = settings.UPI_ID) =>
-    applyTemplate(getText(raw, 'PAY_VIA_PHONE_MESSAGE'), { price, phone, UPI: upi, upi });
+settings.negotiationDisabledMessage = (price) =>
+    applyTemplate(getText(raw, 'NEGOTIATION_DISABLED_MESSAGE') || 'Sorry, price is fixed at ₹{price} (negotiation is not possible).', { price });
+
+settings.negotiationCounterOfferMessage = (price) =>
+    applyTemplate(getText(raw, 'NEGOTIATION_COUNTER_OFFER_MESSAGE') || 'I can accept up to ₹{price} for this meal.', { price });
+
+settings.payViaPhoneMessage = (price, upi = settings.UPI_ID) =>
+    applyTemplate(getText(raw, 'PAY_VIA_PHONE_MESSAGE') || 'Pay ₹{price} to same no or {UPI}', {
+        price,
+        phone: '',
+        UPI: (typeof upi === 'string' && upi.length > 0) ? upi : settings.UPI_ID,
+        upi: (typeof upi === 'string' && upi.length > 0) ? upi : settings.UPI_ID,
+    });
 
 // ─── Runtime overrides (from CLI menu) ──────────────────────
 

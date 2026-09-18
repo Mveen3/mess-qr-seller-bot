@@ -179,57 +179,69 @@ client.on('ready', async () => {
             // 2. Patch getContactModel
             const origGetContactModel = window.WWebJS.getContactModel;
             window.WWebJS.getContactModel = (contact) => {
-                let res = contact.serialize();
-                const wid = window
-                    .require('WAWebWidFactory')
-                    .createWidFromWidLike(contact.id);
+                if (!contact || !contact.id) return null;
 
-                if (wid && wid.isLid() && contact.phoneNumber) {
-                    res.id = contact.phoneNumber;
+                let res;
+                try {
+                    res = contact.serialize ? contact.serialize() : { id: contact.id };
+                } catch (_) {
+                    res = { id: contact.id };
                 }
-
-                res.isBusiness = contact.isBusiness === undefined ? false : contact.isBusiness;
-
-                if (contact.businessProfile) {
-                    try {
-                        res.businessProfile = contact.businessProfile.serialize();
-                    } catch (e) { }
-                }
-
-                res.isBlocked = contact.isContactBlocked;
-                if (!res.isBlocked) {
-                    try {
-                        const alt = window
-                            .require('WAWebApiContact')
-                            .getAlternateUserWid(wid);
-                        if (alt) {
-                            res.isBlocked = !!window
-                                .require('WAWebCollections')
-                                .Blocklist.get(alt);
-                        }
-                    } catch (e) {
-                        // skip Blocklist.get IDB errors
-                    }
-                }
-
-                const ContactMethods = window.require('WAWebContactGetters');
-                try { res.isMe = ContactMethods.getIsMe(contact); } catch (e) { }
-                try { res.isUser = ContactMethods.getIsUser(contact); } catch (e) { }
-                try { res.isGroup = ContactMethods.getIsGroup(contact); } catch (e) { }
-                try { res.isWAContact = ContactMethods.getIsWAContact(contact); } catch (e) { }
-                try { res.userid = ContactMethods.getUserid(contact); } catch (e) { }
-                try { res.verifiedName = ContactMethods.getVerifiedName(contact); } catch (e) { }
-                try { res.verifiedLevel = ContactMethods.getVerifiedLevel(contact); } catch (e) { }
-                try { res.statusMute = ContactMethods.getStatusMute(contact); } catch (e) { }
-                try { res.name = ContactMethods.getName(contact); } catch (e) { }
-                try { res.shortName = ContactMethods.getShortName(contact); } catch (e) { }
-                try { res.pushname = ContactMethods.getPushname(contact); } catch (e) { }
 
                 try {
-                    const { getIsMyContact } = window.require('WAWebFrontendContactGetters');
-                    res.isMyContact = getIsMyContact(contact);
-                } catch (e) { }
-                try { res.isEnterprise = ContactMethods.getIsEnterprise(contact); } catch (e) { }
+                    const wid = window
+                        .require('WAWebWidFactory')
+                        .createWidFromWidLike(contact.id);
+
+                    if (wid && wid.isLid() && contact.phoneNumber) {
+                        res.id = contact.phoneNumber;
+                    }
+
+                    res.isBusiness = contact.isBusiness === undefined ? false : contact.isBusiness;
+
+                    if (contact.businessProfile) {
+                        try {
+                            res.businessProfile = contact.businessProfile.serialize();
+                        } catch (e) { }
+                    }
+
+                    res.isBlocked = contact.isContactBlocked;
+                    if (!res.isBlocked) {
+                        try {
+                            const alt = window
+                                .require('WAWebApiContact')
+                                .getAlternateUserWid(wid);
+                            if (alt) {
+                                res.isBlocked = !!window
+                                    .require('WAWebCollections')
+                                    .Blocklist.get(alt);
+                            }
+                        } catch (e) {
+                            // skip Blocklist.get IDB errors
+                        }
+                    }
+
+                    const ContactMethods = window.require('WAWebContactGetters');
+                    try { res.isMe = ContactMethods.getIsMe(contact); } catch (e) { }
+                    try { res.isUser = ContactMethods.getIsUser(contact); } catch (e) { }
+                    try { res.isGroup = ContactMethods.getIsGroup(contact); } catch (e) { }
+                    try { res.isWAContact = ContactMethods.getIsWAContact(contact); } catch (e) { }
+                    try { res.userid = ContactMethods.getUserid(contact); } catch (e) { }
+                    try { res.verifiedName = ContactMethods.getVerifiedName(contact); } catch (e) { }
+                    try { res.verifiedLevel = ContactMethods.getVerifiedLevel(contact); } catch (e) { }
+                    try { res.statusMute = ContactMethods.getStatusMute(contact); } catch (e) { }
+                    try { res.name = ContactMethods.getName(contact); } catch (e) { }
+                    try { res.shortName = ContactMethods.getShortName(contact); } catch (e) { }
+                    try { res.pushname = ContactMethods.getPushname(contact); } catch (e) { }
+
+                    try {
+                        const { getIsMyContact } = window.require('WAWebFrontendContactGetters');
+                        res.isMyContact = getIsMyContact(contact);
+                    } catch (e) { }
+                    try { res.isEnterprise = ContactMethods.getIsEnterprise(contact); } catch (e) { }
+                } catch (_) {
+                    // Return basic model if getters fail
+                }
 
                 return res;
             };
@@ -237,24 +249,267 @@ client.on('ready', async () => {
             // 3. Patch getContact
             const origGetContact = window.WWebJS.getContact;
             window.WWebJS.getContact = async (contactId) => {
-                const contactWid = window
-                    .require('WAWebWidFactory')
-                    .createWid(contactId);
-                const contact = await window
-                    .require('WAWebCollections')
-                    .Contact.find(contactWid);
+                try {
+                    const contactWid = window
+                        .require('WAWebWidFactory')
+                        .createWid(contactId);
+                    const contact = await window
+                        .require('WAWebCollections')
+                        .Contact.find(contactWid);
 
-                if (contact.isBusiness || contact.isEnterprise) {
+                    if (!contact || !contact.id) {
+                        return {
+                            id: contactWid ? (contactWid._serialized || contactWid) : contactId,
+                            number: contactWid?.user || String(contactId).replace(/\D/g, ''),
+                            name: contactWid?.user || contactId,
+                            pushname: contactWid?.user || '',
+                            isBusiness: false,
+                            isEnterprise: false,
+                            isGroup: false,
+                            isUser: true,
+                            isWAContact: true,
+                            isMyContact: false,
+                            isBlocked: false,
+                        };
+                    }
+
+                    if (contact.isBusiness || contact.isEnterprise) {
+                        try {
+                            const bizProfile = await window
+                                .require('WAWebCollections')
+                                .BusinessProfile.find(contactWid);
+                            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+                        } catch (e) {
+                            // skip BusinessProfile.find IDB errors
+                        }
+                    }
+                    return window.WWebJS.getContactModel(contact);
+                } catch (e) {
+                    return {
+                        id: contactId,
+                        number: String(contactId).replace(/\D/g, ''),
+                        name: contactId,
+                        pushname: '',
+                        isUser: true,
+                    };
+                }
+            };
+
+            // 4. Patch getMessageModel (shields against memoization getter crashes during message send)
+            const origGetMessageModel = window.WWebJS.getMessageModel;
+            window.WWebJS.getMessageModel = (message) => {
+                if (!message) return null;
+                try {
+                    return origGetMessageModel(message);
+                } catch (err) {
                     try {
-                        const bizProfile = await window
-                            .require('WAWebCollections')
-                            .BusinessProfile.find(contactWid);
-                        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
-                    } catch (e) {
-                        // skip BusinessProfile.find IDB errors
+                        return {
+                            id: message.id ? (message.id._serialized || message.id) : null,
+                            body: message.body || '',
+                            type: message.type || 'chat',
+                            t: message.t || Math.floor(Date.now() / 1000),
+                            from: message.from ? (message.from._serialized || message.from) : null,
+                            to: message.to ? (message.to._serialized || message.to) : null,
+                            ack: message.ack || 0,
+                        };
+                    } catch (_) {
+                        return null;
                     }
                 }
-                return window.WWebJS.getContactModel(contact);
+            };
+
+            // 5. Shield WhatsApp Web Getters against memoization crashes when entities are undefined or missing .id
+            const getterModules = [
+                'WAWebContactGetters',
+                'WAWebFrontendContactGetters',
+                'WAWebChatGetters',
+                'WAWebMsgGetters',
+            ];
+            for (const modName of getterModules) {
+                try {
+                    const mod = window.require(modName);
+                    if (mod && typeof mod === 'object') {
+                        for (const [key, origFn] of Object.entries(mod)) {
+                            if (typeof origFn === 'function') {
+                                const k = key.toLowerCase();
+                                mod[key] = function safeGetter(target, ...args) {
+                                    if (!target || target.id === undefined) {
+                                        if (k.startsWith('getis') || k.startsWith('is')) return false;
+                                        if (k.includes('name') || k.includes('title') || k.includes('text') || k.includes('id')) return '';
+                                        if (k.includes('level') || k.includes('time') || k.includes('ts') || k.includes('count')) return 0;
+                                        return null;
+                                    }
+                                    try {
+                                        return origFn.call(this, target, ...args);
+                                    } catch (err) {
+                                        if (err && typeof err.message === 'string' && err.message.includes('Data passed to getter must include an id property')) {
+                                            if (k.startsWith('getis') || k.startsWith('is')) return false;
+                                            if (k.includes('name') || k.includes('title') || k.includes('text') || k.includes('id')) return '';
+                                            if (k.includes('level') || k.includes('time') || k.includes('ts') || k.includes('count')) return 0;
+                                            return null;
+                                        }
+                                        throw err;
+                                    }
+                                };
+                            }
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            // 6. Shield Contact store so un-cached contacts never return undefined to internal WA callers
+            try {
+                const ContactCollection = window.require('WAWebCollections')?.Contact;
+                if (ContactCollection && typeof ContactCollection.get === 'function') {
+                    const origContactGet = ContactCollection.get;
+                    ContactCollection.get = function (wid, ...args) {
+                        const contact = origContactGet.call(this, wid, ...args);
+                        if (contact) return contact;
+                        if (wid) {
+                            return {
+                                id: wid,
+                                isUser: true,
+                                isWAContact: true,
+                                isGroup: false,
+                                isEnterprise: false,
+                                name: (wid && wid.user) ? wid.user : String(wid),
+                                pushname: (wid && wid.user) ? wid.user : '',
+                                serialize: () => ({ id: wid }),
+                            };
+                        }
+                        return contact;
+                    };
+                }
+            } catch (_) {}
+
+            // 7. Patch window.WWebJS.sendMessage to sanitize media payload and resolve sender WID cleanly
+            const origSendMessage = window.WWebJS.sendMessage;
+            window.WWebJS.sendMessage = async function (chat, content, options = {}) {
+                if (options && options.media) {
+                    try {
+                        const ChatGetters = window.require('WAWebChatGetters') || {};
+                        const isChannel = ChatGetters.getIsNewsletter ? ChatGetters.getIsNewsletter(chat) : false;
+                        const isStatus = ChatGetters.getIsBroadcast ? ChatGetters.getIsBroadcast(chat) : false;
+
+                        let mediaOptions = options.sendMediaAsSticker && !isChannel && !isStatus
+                            ? await window.WWebJS.processStickerData(options.media)
+                            : await window.WWebJS.processMediaData(options.media, {
+                                forceSticker: options.sendMediaAsSticker,
+                                forceGif: options.sendVideoAsGif,
+                                forceVoice: options.sendAudioAsVoice,
+                                forceDocument: options.sendMediaAsDocument,
+                                forceMediaHd: options.sendMediaAsHd,
+                                sendToChannel: isChannel,
+                                sendToStatus: isStatus,
+                            });
+
+                        // Extract clean JSON payload from mediaOptions to avoid spreading Backbone/Ampersand models
+                        // whose unmemoized getters crash with "Data passed to getter must include an id property"
+                        const cleanMedia = (mediaOptions && typeof mediaOptions.toJSON === 'function')
+                            ? mediaOptions.toJSON()
+                            : (mediaOptions ? { ...mediaOptions } : {});
+
+                        cleanMedia.caption = options.caption;
+                        cleanMedia.isViewOnce = options.isViewOnce;
+                        content = options.sendMediaAsSticker ? undefined : cleanMedia.preview;
+
+                        delete options.media;
+                        delete options.sendMediaAsSticker;
+
+                        // Resolve sender Wid robustly
+                        let lidUser = null;
+                        let meUser = null;
+                        try {
+                            const UserPrefs = window.require('WAWebUserPrefsMeUser');
+                            lidUser = UserPrefs?.getMaybeMeLidUser ? UserPrefs.getMaybeMeLidUser() : null;
+                            meUser = UserPrefs?.getMaybeMePnUser ? UserPrefs.getMaybeMePnUser() : null;
+                        } catch (_) {}
+
+                        if (!meUser) {
+                            try {
+                                meUser = window.require('WAWebConnModel')?.Conn?.wid || null;
+                            } catch (_) {}
+                        }
+
+                        let from;
+                        if (chat.id && typeof chat.id.isLid === 'function' && chat.id.isLid()) {
+                            from = lidUser || meUser;
+                        } else if (chat.id && typeof chat.id.isGroup === 'function' && chat.id.isGroup()) {
+                            from = (chat.groupMetadata && chat.groupMetadata.isLidAddressingMode)
+                                ? (lidUser || meUser)
+                                : (meUser || lidUser);
+                        } else {
+                            from = meUser || lidUser;
+                        }
+
+                        if (!from) {
+                            try {
+                                from = window.require('WAWebConnModel')?.Conn?.wid;
+                            } catch (_) {}
+                        }
+
+                        let participant;
+                        if (chat.id && (chat.id.isGroup?.() || (typeof chat.id.isStatus === 'function' && chat.id.isStatus()))) {
+                            try {
+                                participant = window.require('WAWebWidFactory').asUserWidOrThrow(from);
+                            } catch (_) {}
+                        }
+
+                        const newId = await window.require('WAWebMsgKey').newId();
+                        const newMsgKey = new (window.require('WAWebMsgKey'))({
+                            from: from,
+                            to: chat.id,
+                            id: newId,
+                            participant: participant,
+                            selfDir: 'out',
+                        });
+
+                        const extraOptions = options.extraOptions || {};
+                        delete options.extraOptions;
+
+                        let ephemeralFields = {};
+                        try {
+                            ephemeralFields = window.require('WAWebGetEphemeralFieldsMsgActionsUtils').getEphemeralFields(chat) || {};
+                        } catch (_) {}
+
+                        // Build message safely using clean plain data
+                        const message = {
+                            ...options,
+                            id: newMsgKey,
+                            ack: 0,
+                            body: content,
+                            from: from,
+                            to: chat.id,
+                            local: true,
+                            self: 'out',
+                            t: parseInt(new Date().getTime() / 1000),
+                            isNewMsg: true,
+                            type: options.sendMediaAsDocument ? 'document' : (cleanMedia.type || 'image'),
+                            ...ephemeralFields,
+                            ...cleanMedia,
+                            ...extraOptions,
+                        };
+
+                        const [msgPromise, sendMsgResultPromise] = window
+                            .require('WAWebSendMsgChatAction')
+                            .addAndSendMsgToChat(chat, message);
+                        await msgPromise;
+
+                        if (options.waitUntilMsgSent && sendMsgResultPromise) {
+                            await sendMsgResultPromise;
+                        }
+
+                        const resultMsg = window.require('WAWebCollections')?.Msg?.get(newMsgKey._serialized);
+                        return resultMsg || { id: newMsgKey, body: content, type: message.type };
+                    } catch (mediaSendErr) {
+                        console.error('[WWebJS] Patched sendMessage error with media:', mediaSendErr);
+                        // Fall back to original sendMessage if custom send hits any exception
+                        return origSendMessage.call(this, chat, content, options);
+                    }
+                }
+
+                // Non-media messages: delegate to original sendMessage
+                return origSendMessage.call(this, chat, content, options);
             };
         });
 
