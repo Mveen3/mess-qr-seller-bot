@@ -21,7 +21,14 @@ const { handleMessage, handleOwnGroupMessage, isSold, handleUnsoldStop, setClien
 const { loadBlocklist, getBlockedNumbers } = require('./utils/blocklist');
 const loyalty = require('./utils/loyalty');
 const groupReactions = require('./utils/groupReactions');
+const {
+    getSessionDir,
+    prepareSession,
+    setupGracefulShutdown,
+    removeSessionLocks,
+} = require('./utils/processManager');
 
+const sessionDir = getSessionDir('./.wwebjs_auth');
 
 // ─── Runtime state set by CLI menu ──────────────────────────
 let runOpts = {};
@@ -42,8 +49,6 @@ const client = new Client({
             '--disable-default-apps',
             '--disable-translate',
             '--disable-sync',
-            '--no-zygote',
-            '--single-process',
         ],
     },
     // Don't cache WhatsApp Web version — always fetch the latest to avoid
@@ -611,11 +616,15 @@ client.on('message_edit', async (msg, newBody, prevBody) => {
 
 // ─── Disconnection & Reconnect ──────────────────────────────
 client.on('disconnected', (reason) => {
+    if (shutdownHandler.isShuttingDown()) return;
     console.warn('⚠️  [Main] Client disconnected:', reason);
-    console.log('🔄 [Main] Attempting to reconnect…');
-    setTimeout(() => {
+    stopScheduler();
+    console.log('🔄 [Main] Attempting to reconnect in 5s…');
+    setTimeout(async () => {
+        if (shutdownHandler.isShuttingDown()) return;
         try {
-            client.initialize();
+            prepareSession(sessionDir);
+            await client.initialize();
         } catch (err) {
             console.error('❌ [Main] Reconnect failed:', err.message);
         }
@@ -632,17 +641,26 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ─── Graceful Shutdown ──────────────────────────────────────
-process.on('SIGINT', async () => {
-    console.log('\n👋 Shutting down gracefully…');
-    stopScheduler();
-    try {
-        await client.destroy();
-    } catch (_) { /* ignore */ }
-    process.exit(0);
+const shutdownHandler = setupGracefulShutdown({
+    client,
+    sessionDir,
+    onShutdown: async () => {
+        stopScheduler();
+    },
+});
+
+process.on('exit', () => {
+    removeSessionLocks(sessionDir);
 });
 
 // ─── Start ──────────────────────────────────────────────────
 (async () => {
+    // Proactively clean up any orphaned browser processes or stale locks from previous runs
+    const cleaned = prepareSession(sessionDir);
+    if (cleaned > 0) {
+        console.log(`🧹 Cleaned up ${cleaned} orphaned browser process(es) from previous run.`);
+    }
+
     // Runs before the menu so utils/blocklist.csv and utils/purchases.csv are created (if missing)
     // and ready to edit well before the bot connects.
     loadBlocklist();
@@ -657,5 +675,21 @@ process.on('SIGINT', async () => {
     });
 
     console.log('🔌 Connecting to WhatsApp…\n');
-    client.initialize();
+    try {
+        await client.initialize();
+    } catch (err) {
+        if (err.message && err.message.includes('The browser is already running')) {
+            console.warn('⚠️  Detected locked browser session. Cleaning up and retrying…');
+            prepareSession(sessionDir);
+            try {
+                await client.initialize();
+            } catch (retryErr) {
+                console.error('❌ Failed to connect to WhatsApp after auto-cleanup:', retryErr.message);
+                process.exit(1);
+            }
+        } else {
+            console.error('❌ Failed to connect to WhatsApp:', err.message || err);
+            process.exit(1);
+        }
+    }
 })();
