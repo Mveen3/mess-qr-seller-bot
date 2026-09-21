@@ -198,8 +198,29 @@ client.on('ready', async () => {
                         .require('WAWebWidFactory')
                         .createWidFromWidLike(contact.id);
 
-                    if (wid && wid.isLid() && contact.phoneNumber) {
-                        res.id = contact.phoneNumber;
+                    if (wid && wid.isLid()) {
+                        let phoneWid = null;
+                        try {
+                            phoneWid = window.require('WAWebApiContact').getPhoneNumber(wid);
+                        } catch (_) { }
+                        if (!phoneWid) {
+                            try {
+                                const { toPn } = window.require('WAWebLidMigrationUtils');
+                                phoneWid = toPn(wid);
+                            } catch (_) { }
+                        }
+                        if (!phoneWid) {
+                            try {
+                                phoneWid = window.require('WAWebApiContact').getAlternateUserWid(wid);
+                            } catch (_) { }
+                        }
+                        if (phoneWid) {
+                            const pnSerialized = phoneWid._serialized || (phoneWid.user ? `${phoneWid.user}@c.us` : String(phoneWid));
+                            res.phoneNumber = pnSerialized;
+                            res.pnId = phoneWid;
+                            res.number = phoneWid.user || String(phoneWid);
+                            res.userid = phoneWid.user || String(phoneWid);
+                        }
                     }
 
                     res.isBusiness = contact.isBusiness === undefined ? false : contact.isBusiness;
@@ -231,7 +252,13 @@ client.on('ready', async () => {
                     try { res.isUser = ContactMethods.getIsUser(contact); } catch (e) { }
                     try { res.isGroup = ContactMethods.getIsGroup(contact); } catch (e) { }
                     try { res.isWAContact = ContactMethods.getIsWAContact(contact); } catch (e) { }
-                    try { res.userid = ContactMethods.getUserid(contact); } catch (e) { }
+                    try {
+                        const uid = ContactMethods.getUserid(contact);
+                        // If not resolved to phoneWid, only set userid if not an LID
+                        if (!res.userid) {
+                            res.userid = uid;
+                        }
+                    } catch (e) { }
                     try { res.verifiedName = ContactMethods.getVerifiedName(contact); } catch (e) { }
                     try { res.verifiedLevel = ContactMethods.getVerifiedLevel(contact); } catch (e) { }
                     try { res.statusMute = ContactMethods.getStatusMute(contact); } catch (e) { }
@@ -262,10 +289,36 @@ client.on('ready', async () => {
                         .require('WAWebCollections')
                         .Contact.find(contactWid);
 
+                    let phoneWid = null;
+                    if (contactWid && typeof contactWid.isLid === 'function' && contactWid.isLid()) {
+                        try {
+                            phoneWid = window.require('WAWebApiContact').getPhoneNumber(contactWid);
+                        } catch (_) { }
+                        if (!phoneWid) {
+                            try {
+                                const { toPn } = window.require('WAWebLidMigrationUtils');
+                                phoneWid = toPn(contactWid);
+                            } catch (_) { }
+                        }
+                        if (!phoneWid) {
+                            try {
+                                phoneWid = window.require('WAWebApiContact').getAlternateUserWid(contactWid);
+                            } catch (_) { }
+                        }
+                        if (!phoneWid && window.WWebJS?.enforceLidAndPnRetrieval) {
+                            try {
+                                const retrieved = await window.WWebJS.enforceLidAndPnRetrieval(contactWid._serialized || contactId);
+                                if (retrieved?.phone) phoneWid = retrieved.phone;
+                            } catch (_) { }
+                        }
+                    }
+
                     if (!contact || !contact.id) {
+                        const resolvedNumber = phoneWid?.user || (contactWid?.isLid?.() ? '' : (contactWid?.user || String(contactId).replace(/\D/g, '')));
                         return {
                             id: contactWid ? (contactWid._serialized || contactWid) : contactId,
-                            number: contactWid?.user || String(contactId).replace(/\D/g, ''),
+                            number: resolvedNumber,
+                            phoneNumber: phoneWid?._serialized || null,
                             name: contactWid?.user || contactId,
                             pushname: contactWid?.user || '',
                             isBusiness: false,
@@ -288,11 +341,17 @@ client.on('ready', async () => {
                             // skip BusinessProfile.find IDB errors
                         }
                     }
-                    return window.WWebJS.getContactModel(contact);
+                    const model = window.WWebJS.getContactModel(contact);
+                    if (phoneWid && model) {
+                        model.phoneNumber = phoneWid._serialized || (phoneWid.user ? `${phoneWid.user}@c.us` : String(phoneWid));
+                        model.number = phoneWid.user || model.number;
+                        model.userid = phoneWid.user || model.userid;
+                    }
+                    return model;
                 } catch (e) {
                     return {
                         id: contactId,
-                        number: String(contactId).replace(/\D/g, ''),
+                        number: '',
                         name: contactId,
                         pushname: '',
                         isUser: true,

@@ -6,13 +6,47 @@ const path = require('path');
 const CSV_HEADER = 'phone,name,total_spent,last_updated\n';
 
 /**
- * Reduce any phone-number-like string to its 10-digit national number.
+ * Reduce any phone-number-like string to its 10-digit Indian national number.
+ * Accepts standard 10-digit mobile numbers (starting with 6, 7, 8, 9) and
+ * strips leading +91, 91, 0091, or trunk 0.
+ * Rejects WhatsApp LIDs (@lid or 14+ digit IDs) to prevent storing internal IDs as phone numbers.
  */
 function normalizePhoneNumber(value) {
     if (value === undefined || value === null) return null;
-    const digits = String(value).replace(/\D/g, '');
-    if (digits.length < 10) return null;
-    return digits.slice(-10);
+
+    const str = String(value).trim();
+    if (!str) return null;
+
+    // Reject any string explicitly referencing @lid
+    if (str.toLowerCase().includes('@lid')) return null;
+
+    // Strip all non-digit characters
+    let digits = str.replace(/\D/g, '');
+
+    // Handle 0091 prefix (14 digits)
+    if (digits.length === 14 && digits.startsWith('0091')) {
+        digits = digits.slice(4);
+    }
+    // Handle 91 country code prefix (12 digits)
+    else if (digits.length === 12 && digits.startsWith('91')) {
+        digits = digits.slice(2);
+    }
+    // Handle leading 0 trunk prefix (11 digits)
+    else if (digits.length === 11 && digits.startsWith('0')) {
+        digits = digits.slice(1);
+    }
+
+    // Check for standard 10-digit Indian mobile number (starts with 6-9)
+    if (/^[6-9]\d{9}$/.test(digits)) {
+        return digits;
+    }
+
+    // Fallback: exact 10 digits
+    if (/^\d{10}$/.test(digits)) {
+        return digits;
+    }
+
+    return null;
 }
 
 /**
@@ -21,12 +55,14 @@ function normalizePhoneNumber(value) {
 function widToPhoneNumber(wid) {
     if (!wid) return null;
     if (typeof wid === 'object') {
+        const server = wid.server || (wid._serialized ? wid._serialized.split('@')[1] : null);
+        if (server && server.toLowerCase() === 'lid') return null; // LID is not a phone number
         const serialized =
-            wid._serialized || (wid.user ? `${wid.user}@${wid.server || 'c.us'}` : null);
+            wid._serialized || (wid.user ? `${wid.user}@${server || 'c.us'}` : null);
         return widToPhoneNumber(serialized);
     }
 
-    const text = String(wid);
+    const text = String(wid).trim();
     const atIndex = text.indexOf('@');
     if (atIndex === -1) return normalizePhoneNumber(text);
 
@@ -37,17 +73,38 @@ function widToPhoneNumber(wid) {
 }
 
 /**
- * Resolve a unique buyer identifier (10-digit phone number, or raw WID if phone unavailable).
+ * Resolve a unique buyer 10-digit Indian phone number.
+ * Returns null if the phone number cannot be determined (e.g. sender is an unmapped @lid).
  */
 function resolveBuyerPhone(contact, senderId) {
-    const contactPhone = contact?.number || contact?.phoneNumber;
-    const normalizedContactPhone = normalizePhoneNumber(contactPhone);
-    if (normalizedContactPhone) return normalizedContactPhone;
+    // 1. Check contact.phoneNumber first (where WhatsApp Web attaches resolved phone WID or string)
+    if (contact?.phoneNumber) {
+        const fromContactPn = widToPhoneNumber(contact.phoneNumber) || normalizePhoneNumber(contact.phoneNumber);
+        if (fromContactPn) return fromContactPn;
+    }
 
+    // 2. Check contact.id IF it is a standard @c.us phone WID and not a LID
+    if (contact?.id) {
+        const fromContactId = widToPhoneNumber(contact.id);
+        if (fromContactId) return fromContactId;
+    }
+
+    // 3. Check contact.number ONLY IF contact.id is NOT an LID (mirrors blocklist.js)
+    const isContactLid = Boolean(
+        contact?.id?.server === 'lid' ||
+        (typeof contact?.id?._serialized === 'string' && contact.id._serialized.endsWith('@lid')) ||
+        (typeof contact?.id === 'string' && contact.id.endsWith('@lid'))
+    );
+    if (!isContactLid && contact?.number) {
+        const fromContactNumber = normalizePhoneNumber(contact.number);
+        if (fromContactNumber) return fromContactNumber;
+    }
+
+    // 4. Check senderId IF not an LID
     const widPhone = widToPhoneNumber(senderId);
     if (widPhone) return widPhone;
 
-    return senderId ? String(senderId).trim() : 'unknown';
+    return null;
 }
 
 /**
@@ -190,13 +247,18 @@ function saveRecords(filePath, records) {
 }
 
 /**
- * Get buyer loyalty record by phone or senderId.
+ * Get buyer loyalty record by 10-digit Indian phone number (or raw legacy ID).
  */
 function getBuyer(filePath, phoneOrId) {
+    if (!phoneOrId) return null;
     const records = loadRecords(filePath);
-    const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
-    const found = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
-    return found || null;
+    const normalized = normalizePhoneNumber(phoneOrId);
+    if (normalized) {
+        const found = records.find((r) => r.phone === normalized);
+        if (found) return found;
+    }
+    const raw = String(phoneOrId).trim();
+    return records.find((r) => r.phone === raw) || null;
 }
 
 /**
@@ -209,15 +271,19 @@ function isFreeMealEligible(filePath, phoneOrId, target = 170) {
 }
 
 /**
- * Record a paid purchase for a buyer.
+ * Record a paid purchase for a buyer using their 10-digit Indian phone number as primary key.
  */
 function recordPurchase(filePath, phoneOrId, name, amount, target = 170) {
     const records = loadRecords(filePath);
-    const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
+    const normalized = normalizePhoneNumber(phoneOrId);
+    if (!normalized) {
+        console.warn(`⚠️  [Loyalty] Cannot record purchase: "${phoneOrId}" is not a valid 10-digit Indian phone number.`);
+        return null;
+    }
     const purchaseAmount = Math.max(0, Number(amount) || 0);
     const nowStr = getTodayDateFormatted();
 
-    let buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
+    let buyer = records.find((r) => r.phone === normalized);
     const previousTotal = buyer ? buyer.totalSpent : 0;
     const newTotal = previousTotal + purchaseAmount;
 
@@ -257,10 +323,14 @@ function recordPurchase(filePath, phoneOrId, name, amount, target = 170) {
  */
 function claimFreeMeal(filePath, phoneOrId, name) {
     const records = loadRecords(filePath);
-    const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
+    const normalized = normalizePhoneNumber(phoneOrId);
+    if (!normalized) {
+        console.warn(`⚠️  [Loyalty] Cannot claim free meal: "${phoneOrId}" is not a valid 10-digit Indian phone number.`);
+        return null;
+    }
     const nowStr = getTodayDateFormatted();
 
-    let buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
+    let buyer = records.find((r) => r.phone === normalized);
     const previousTotal = buyer ? buyer.totalSpent : 0;
 
     if (buyer) {
@@ -292,10 +362,11 @@ function claimFreeMeal(filePath, phoneOrId, name) {
  */
 function revertBuyerAction(filePath, phoneOrId, { wasFreeMeal, amount, previousTotal }) {
     const records = loadRecords(filePath);
-    const normalized = normalizePhoneNumber(phoneOrId) || String(phoneOrId).trim();
+    const normalized = normalizePhoneNumber(phoneOrId);
+    const raw = String(phoneOrId).trim();
     const nowStr = getTodayDateFormatted();
 
-    const buyer = records.find((r) => r.phone === normalized || r.phone === phoneOrId);
+    const buyer = records.find((r) => (normalized && r.phone === normalized) || r.phone === raw);
     if (!buyer) return;
 
     if (wasFreeMeal) {

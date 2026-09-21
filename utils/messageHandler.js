@@ -194,6 +194,13 @@ async function handleMessage(msg, client) {
 
         // ── Current buyer says "done", sends screenshot, or payment-signal arrives ────────────────
         if (currentBuyer && senderId === currentBuyer.id) {
+            if (!currentBuyer.phone) {
+                const capturedPhone = extractPhoneNumberFromText(body);
+                if (capturedPhone) {
+                    currentBuyer.phone = capturedPhone;
+                    console.log(`📱 [Handler] Captured buyer phone ${capturedPhone} from message text.`);
+                }
+            }
             const price = getCurrentPrice();
             const doneKeyword = isDoneKeyword(body);
             const paymentSignal = isPaymentSignal(msg, price);
@@ -317,12 +324,90 @@ async function handleBuyerIntent(chat, senderId, senderName, client, contact = n
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  BUYER PHONE RESOLUTION HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Extract a 10-digit Indian phone number from text if present.
+ */
+function extractPhoneNumberFromText(text) {
+    if (!text || typeof text !== 'string') return null;
+    const match = text.match(/(?:\+?91[\s-]?)?([6-9]\d{9})\b/);
+    if (match && match[1]) {
+        return loyalty.normalizePhoneNumber(match[1]);
+    }
+    return null;
+}
+
+/**
+ * Asynchronously resolve a buyer's 10-digit Indian phone number.
+ * First checks contact and chat, then queries WhatsApp Web via Puppeteer
+ * if the sender is an LID.
+ */
+async function resolveBuyerPhoneAsync(contact, senderId, chat = null) {
+    // 1. Direct loyalty check
+    const directPhone = loyalty.resolveBuyerPhone(contact, senderId);
+    if (directPhone) return directPhone;
+
+    // 2. Chat ID check (if chat is @c.us)
+    const chatPhone = loyalty.widToPhoneNumber(chat?.id);
+    if (chatPhone) return chatPhone;
+
+    // 3. If sender or contact is an LID, query WhatsApp Web via Puppeteer
+    const isLid = (typeof senderId === 'string' && senderId.endsWith('@lid')) ||
+                  (contact?.id && (contact.id.server === 'lid' || String(contact.id._serialized || contact.id).endsWith('@lid')));
+
+    if (isLid && globalClient?.pupPage) {
+        try {
+            const targetId = String(contact?.id?._serialized || contact?.id || senderId);
+            const resolvedUser = await globalClient.pupPage.evaluate(async (idStr) => {
+                const widFactory = window.require('WAWebWidFactory');
+                const wid = widFactory.createWid(idStr);
+                let phoneWid = null;
+                try {
+                    phoneWid = window.require('WAWebApiContact').getPhoneNumber(wid);
+                } catch (_) { }
+                if (!phoneWid) {
+                    try {
+                        const { toPn } = window.require('WAWebLidMigrationUtils');
+                        phoneWid = toPn(wid);
+                    } catch (_) { }
+                }
+                if (!phoneWid) {
+                    try {
+                        phoneWid = window.require('WAWebApiContact').getAlternateUserWid(wid);
+                    } catch (_) { }
+                }
+                if (!phoneWid && window.WWebJS?.enforceLidAndPnRetrieval) {
+                    try {
+                        const res = await window.WWebJS.enforceLidAndPnRetrieval(idStr);
+                        if (res?.phone) phoneWid = res.phone;
+                    } catch (_) { }
+                }
+                return phoneWid?.user || (phoneWid?._serialized ? phoneWid._serialized.split('@')[0] : null);
+            }, targetId);
+
+            if (resolvedUser) {
+                const normalized = loyalty.normalizePhoneNumber(resolvedUser);
+                if (normalized) return normalized;
+            }
+        } catch (err) {
+            console.warn('⚠️  [Handler] Async phone resolution from LID failed:', err.message);
+        }
+    }
+
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  ASSIGN BUYER
 // ═══════════════════════════════════════════════════════════════
 
 async function assignBuyer(chat, senderId, senderName, contact = null, agreedPrice = null) {
-    const buyerPhone = loyalty.resolveBuyerPhone(contact, senderId);
-    const freeEligible = loyalty.isFreeMealEligible(config.LOYALTY_CSV_PATH, buyerPhone, config.LOYALTY_TARGET);
+    const buyerPhone = await resolveBuyerPhoneAsync(contact, senderId, chat);
+    const freeEligible = buyerPhone
+        ? loyalty.isFreeMealEligible(config.LOYALTY_CSV_PATH, buyerPhone, config.LOYALTY_TARGET)
+        : false;
     const price = getCurrentPrice();
     const safePrice = Number.isFinite(price) && price > 0 ? price : config.DEFAULT_PRICE;
     const finalPrice = (Number.isFinite(agreedPrice) && agreedPrice > 0) ? agreedPrice : safePrice;
@@ -337,7 +422,7 @@ async function assignBuyer(chat, senderId, senderName, contact = null, agreedPri
         assignedAt: Date.now(),
         agreedPrice: finalPrice,
     };
-    console.log(`🛒 [Handler] Buyer assigned: ${senderName} (id: ${buyerPhone}, freeEligible: ${freeEligible}, price: ₹${finalPrice})`);
+    console.log(`🛒 [Handler] Buyer assigned: ${senderName} (phone: ${buyerPhone || 'unresolved'}, freeEligible: ${freeEligible}, price: ₹${finalPrice})`);
 
     try {
         if (freeEligible) {
@@ -707,7 +792,10 @@ async function completeSale(chat, buyerName) {
     allowTestingRevert = true;
     const isFree = Boolean(currentBuyer && currentBuyer.isFreeMeal);
     const activePrice = getCurrentPrice();
-    const buyerPhone = currentBuyer?.phone || loyalty.resolveBuyerPhone(null, stats.buyerId);
+    let buyerPhone = currentBuyer?.phone;
+    if (!buyerPhone) {
+        buyerPhone = await resolveBuyerPhoneAsync(null, stats.buyerId, chat);
+    }
     const senderId = currentBuyer?.id || stats.buyerId;
 
     stats.isFreeMeal = isFree;
@@ -724,36 +812,42 @@ async function completeSale(chat, buyerName) {
     // ── 1. Record Loyalty First (Independently protected) ─────────────────
     let loyaltyStatus = '';
     try {
-        if (isFree) {
-            const claimResult = loyalty.claimFreeMeal(config.LOYALTY_CSV_PATH, buyerPhone, buyerName);
-            stats.loyaltyRecord = {
-                phone: buyerPhone,
-                wasFreeMeal: true,
-                amount: 0,
-                previousTotal: claimResult.previousTotal,
-            };
-            console.log(`🎁 [Loyalty] FREE meal delivered to ${buyerName}. Total purchases reset to 0 in CSV.`);
+        if (buyerPhone) {
+            if (isFree) {
+                const claimResult = loyalty.claimFreeMeal(config.LOYALTY_CSV_PATH, buyerPhone, buyerName);
+                stats.loyaltyRecord = {
+                    phone: buyerPhone,
+                    wasFreeMeal: true,
+                    amount: 0,
+                    previousTotal: claimResult ? claimResult.previousTotal : 0,
+                };
+                console.log(`🎁 [Loyalty] FREE meal delivered to ${buyerName} (${buyerPhone}). Total purchases reset to 0 in CSV.`);
+            } else {
+                const finalPrice = Number.isFinite(stats.soldPrice) && stats.soldPrice > 0 ? stats.soldPrice : config.DEFAULT_PRICE;
+                const purchaseResult = loyalty.recordPurchase(
+                    config.LOYALTY_CSV_PATH,
+                    buyerPhone,
+                    buyerName,
+                    finalPrice,
+                    config.LOYALTY_TARGET
+                );
+                if (purchaseResult) {
+                    stats.loyaltyRecord = {
+                        phone: buyerPhone,
+                        wasFreeMeal: false,
+                        amount: finalPrice,
+                        previousTotal: purchaseResult.previousTotal,
+                    };
+
+                    loyaltyStatus = purchaseResult.isFreeNext
+                        ? config.loyaltyReachedMessage(config.LOYALTY_TARGET)
+                        : config.loyaltyProgressMessage(purchaseResult.newTotal, config.LOYALTY_TARGET, purchaseResult.remaining);
+
+                    console.log(`💳 [Loyalty] Purchase recorded: ₹${finalPrice} for ${buyerName} (${buyerPhone}). New total: ₹${purchaseResult.newTotal}/${config.LOYALTY_TARGET}.`);
+                }
+            }
         } else {
-            const finalPrice = Number.isFinite(stats.soldPrice) && stats.soldPrice > 0 ? stats.soldPrice : config.DEFAULT_PRICE;
-            const purchaseResult = loyalty.recordPurchase(
-                config.LOYALTY_CSV_PATH,
-                buyerPhone,
-                buyerName,
-                finalPrice,
-                config.LOYALTY_TARGET
-            );
-            stats.loyaltyRecord = {
-                phone: buyerPhone,
-                wasFreeMeal: false,
-                amount: finalPrice,
-                previousTotal: purchaseResult.previousTotal,
-            };
-
-            loyaltyStatus = purchaseResult.isFreeNext
-                ? config.loyaltyReachedMessage(config.LOYALTY_TARGET)
-                : config.loyaltyProgressMessage(purchaseResult.newTotal, config.LOYALTY_TARGET, purchaseResult.remaining);
-
-            console.log(`💳 [Loyalty] Purchase recorded: ₹${finalPrice} for ${buyerName}. New total: ₹${purchaseResult.newTotal}/${config.LOYALTY_TARGET}.`);
+            console.warn(`⚠️  [Loyalty] Buyer phone could not be resolved for ${buyerName} (${senderId}). Skipping CSV record to avoid storing non-phone identifier.`);
         }
     } catch (loyaltyErr) {
         console.error('❌ [Loyalty] Error updating purchase record:', loyaltyErr.message);
