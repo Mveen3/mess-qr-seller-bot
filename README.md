@@ -4,6 +4,27 @@ Automated WhatsApp bot for selling mess meal QR codes with scheduled price drops
 
 ---
 
+## 💡 Motivation Behind Building
+
+At IIIT Hyderabad, mess policies enforce strict cancellation limits: a maximum of **5 cancellations per meal per month**, requiring at least **24 hours prior cancellation**. In reality, student schedules are unpredictable—late-night study sessions routinely lead to sleeping through breakfast, and impromptu plans leave paid meals untouched. With no administrative recourse for last-minute changes, students incur a quiet, routine financial leak.
+
+### The Flawed Manual Workaround
+Students improvised by selling unused meal QRs over WhatsApp groups, but the manual process suffered from severe friction:
+- **High Attention Overhead**: Sellers had to babysit chat threads, field repetitive DMs, negotiate prices, share UPI credentials, verify transactions, and send QR images.
+- **The Babysitting Bottleneck**: If a seller fell asleep, attended class, or stepped away, the listing sat idle, buyers messaged into a void, and the meal expired unused anyway.
+- **Coordination Lag**: Forgetting to manually mark messages as sold (e.g., reacting with ✅) caused confusion and wasted everyone's time.
+
+### The Autonomous "Vending Machine" Solution
+This bot closes the gap between an unusable meal and someone looking for a quick bite by turning a chaotic manual hustle into a zero-touch vending machine:
+1. **Scheduled Dynamic Drops**: Automatically broadcasts listings to target groups with gradual price decrements as meal cutoffs approach.
+2. **Intent Recognition & Fair Queuing**: Parses buyer intent (`buy`, `want`), queues buyers fairly, and enforces inactivity timeouts to prevent stalled sales.
+3. **Automated Negotiation**: Concludes deals within pre-configured margins or defends fixed pricing without manual intervention.
+4. **Zero-Touch Fulfillment**: Auto-detects payments (WhatsApp Pay, screenshots, or `DONE`), instantly delivers the QR image, reacts with ✅ in the group, and supports rollback (`TESTING`).
+
+> **Drop the QR once, walk away, and let the system handle pricing, negotiation, and delivery.** Students recover sunk meal costs without losing sleep or study hours.
+
+---
+
 ## ⚡ Features
 
 - **Scheduled Group Drops**: Automatically posts sell messages to target groups across configured meal intervals with dropping prices.
