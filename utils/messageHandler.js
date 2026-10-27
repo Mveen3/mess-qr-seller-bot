@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { MessageMedia } = require('whatsapp-web.js');
 const config = require('./config');
-const { isBuyerKeyword, isDoneKeyword, isSellMessageSubstring } = require('./keywordMatcher');
+const { isBuyerKeyword, isDoneKeyword, isTimeKeyword, isSellMessageSubstring } = require('./keywordMatcher');
 const { isBlockedWid, isBlockedContact } = require('./blocklist');
 const { extractPrice } = require('./priceParser');
 const { getCurrentPrice, stopScheduler, getCurrentMeal, restartScheduler } = require('./priceScheduler');
@@ -227,6 +227,14 @@ async function handleMessage(msg, client) {
                 await completeSale(chat, senderName);
                 return;
             }
+
+            // Check for TIME extension request from current buyer
+            const timeKeyword = isTimeKeyword(body);
+            if (timeKeyword) {
+                console.log(`⏱️  [Handler] Time extension keyword detected for ${senderName}: "${timeKeyword}"`);
+                await handleTimeExtension(chat, senderName);
+                return;
+            }
         }
 
         // ── Check if this message is a reply to the sell template ──
@@ -299,26 +307,14 @@ async function handleBuyerIntent(chat, senderId, senderName, client, contact = n
     }
 
     // There IS a current buyer — a second buyer has arrived
-    const elapsed = Date.now() - currentBuyer.assignedAt;
+    const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
+    if (!alreadyQueued) {
+        buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact });
+        console.log(`🔢 [Handler] ${senderName} queued (position ${buyerQueue.length}).`);
+    }
 
-    if (elapsed < config.BUYER_INACTIVITY_MS) {
-        // ── Within 90s window → queue new buyer and schedule timeout ──
-        const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
-        if (!alreadyQueued) {
-            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact });
-            console.log(`🔢 [Handler] ${senderName} queued (position ${buyerQueue.length}).`);
-        }
-
-        scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
-    } else {
-        // ── After 90s window → immediate move to next buyer ──
-        console.log(`⏱️  [Handler] ${currentBuyer.name} exceeded 90s window. Sending timeout msg & assigning new buyer.`);
-
-        const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
-        if (!alreadyQueued) {
-            buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact });
-        }
-
+    if (!queueTimer) {
+        console.log(`⏱️  [Handler] Current buyer has no active timer. Moving to next buyer.`);
         await moveNextBuyer();
     }
 }
@@ -421,6 +417,7 @@ async function assignBuyer(chat, senderId, senderName, contact = null, agreedPri
         chat,
         assignedAt: Date.now(),
         agreedPrice: finalPrice,
+        hasExtendedTime: false,
     };
     console.log(`🛒 [Handler] Buyer assigned: ${senderName} (phone: ${buyerPhone || 'unresolved'}, freeEligible: ${freeEligible}, price: ₹${finalPrice})`);
 
@@ -439,9 +436,8 @@ async function assignBuyer(chat, senderId, senderName, contact = null, agreedPri
         console.error('❌ [Handler] Error sending buyer messages:', err.message);
     }
 
-    if (buyerQueue.length > 0) {
-        scheduleNextBuyer(config.BUYER_INACTIVITY_MS);
-    }
+    // Always start inactivity timer for the assigned buyer
+    scheduleNextBuyer(config.BUYER_INACTIVITY_MS);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -452,21 +448,26 @@ function scheduleNextBuyer(delayMs) {
     if (queueTimer) return; // Wait until current timer finishes
 
     const safeDelayMs = Math.max(0, Number(delayMs) || 0);
-    console.log(`⏱️  [Timer] Checking queue in ${Math.round(safeDelayMs / 1000)}s...`);
+    console.log(`⏱️  [Timer] Inactivity timer scheduled for ${Math.round(safeDelayMs / 1000)}s...`);
 
     const warningDelayMs = safeDelayMs - config.BUYER_TIMEOUT_WARNING_MS;
     const warningBuyerId = currentBuyer?.id || null;
-    if (warningDelayMs > 0 && currentBuyer?.chat && buyerQueue.length > 0) {
+    const buyerPhone = currentBuyer?.phone || null;
+    const buyerChat = currentBuyer?.chat || null;
+
+    if (warningDelayMs > 0 && buyerChat) {
         queueWarningTimer = setTimeout(async () => {
             queueWarningTimer = null;
             if (sold || !currentBuyer) return;
             if (!warningBuyerId || currentBuyer.id !== warningBuyerId) return;
-            if (buyerQueue.length === 0) return;
             if (isBlockedWid(currentBuyer.id)) return; // blocked mid-purchase
 
             try {
-                await currentBuyer.chat.sendMessage(config.timeoutWarningMessage());
-                console.log(`⏳ [Timer] Sent timeout warning to ${currentBuyer.name}.`);
+                await sendTextWithFallbacks(buyerChat, buyerPhone, warningBuyerId, config.timeoutWarningMessage());
+                console.log(`⏳ [Timer] Sent timeout warning (30s left) to ${currentBuyer.name}.`);
+
+                await sendTextWithFallbacks(buyerChat, buyerPhone, warningBuyerId, config.timePromptMessage());
+                console.log(`⏳ [Timer] Sent time extension prompt to ${currentBuyer.name}.`);
             } catch (err) {
                 console.error('❌ [Timer] Error sending timeout warning:', err.message);
             }
@@ -476,10 +477,70 @@ function scheduleNextBuyer(delayMs) {
     queueTimer = setTimeout(async () => {
         queueTimer = null;
         if (sold || !currentBuyer) return;
+        if (!warningBuyerId || currentBuyer.id !== warningBuyerId) return;
 
-        console.log(`⏱️  [Timer] ${currentBuyer.name} ran out of time. Checking queue.`);
+        console.log(`⏱️  [Timer] ${currentBuyer.name} ran out of time. Moving to next buyer.`);
         await moveNextBuyer();
     }, safeDelayMs);
+}
+
+function scheduleTimeExtension() {
+    clearAllTimers();
+    if (!currentBuyer) return;
+
+    const extendMs = config.BUYER_EXTEND_TIME_MS || 60000;
+    const warnMs = config.BUYER_EXTEND_WARNING_MS || 10000;
+    const warningDelayMs = Math.max(0, extendMs - warnMs);
+    const buyerId = currentBuyer.id;
+    const buyerPhone = currentBuyer.phone || null;
+    const buyerChat = currentBuyer.chat || null;
+    const buyerName = currentBuyer.name;
+
+    console.log(`⏱️  [Timer] Extension active: ${Math.round(extendMs / 1000)}s total, warning in ${Math.round(warningDelayMs / 1000)}s.`);
+
+    if (warningDelayMs > 0 && buyerChat) {
+        queueWarningTimer = setTimeout(async () => {
+            queueWarningTimer = null;
+            if (sold || !currentBuyer) return;
+            if (currentBuyer.id !== buyerId) return;
+            if (isBlockedWid(buyerId)) return;
+
+            try {
+                await sendTextWithFallbacks(buyerChat, buyerPhone, buyerId, config.timeExtensionWarningMessage());
+                console.log(`⏳ [Timer] Sent extension warning (10s left) to ${buyerName}.`);
+            } catch (err) {
+                console.error('❌ [Timer] Error sending extension warning:', err.message);
+            }
+        }, warningDelayMs);
+    }
+
+    queueTimer = setTimeout(async () => {
+        queueTimer = null;
+        if (sold || !currentBuyer) return;
+        if (currentBuyer.id !== buyerId) return;
+
+        console.log(`⏱️  [Timer] ${buyerName}'s extension expired. Moving to next buyer.`);
+        await moveNextBuyer();
+    }, extendMs);
+}
+
+async function handleTimeExtension(chat, senderName) {
+    if (!currentBuyer) return;
+
+    if (currentBuyer.hasExtendedTime) {
+        console.log(`⏳ [Timer] ${senderName} requested extra time again; already used.`);
+        await sendTextWithFallbacks(chat, currentBuyer.phone, currentBuyer.id, config.timeExtensionAlreadyUsedMessage());
+        return;
+    }
+
+    currentBuyer.hasExtendedTime = true;
+    currentBuyer.extendedAt = Date.now();
+    clearAllTimers();
+
+    console.log(`⏳ [Timer] Extra 60s extension granted to ${senderName}.`);
+    await sendTextWithFallbacks(chat, currentBuyer.phone, currentBuyer.id, config.timeExtensionGrantedMessage());
+
+    scheduleTimeExtension();
 }
 
 async function moveNextBuyer() {
@@ -489,7 +550,8 @@ async function moveNextBuyer() {
         console.log(`⛔ [Blocklist] ${currentBuyer.name} was blocked mid-purchase — dropping silently.`);
     } else {
         try {
-            await currentBuyer.chat.sendMessage(config.timeoutFinalMessage());
+            await sendTextWithFallbacks(currentBuyer.chat, currentBuyer.phone, currentBuyer.id, config.timeoutFinalMessage());
+            console.log(`⏱️  [Handler] Sent timeout final message to ${currentBuyer.name}.`);
         } catch (err) {
             console.error('❌ [Timer] Error notifying leaving buyer:', err.message);
         }
@@ -583,12 +645,10 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice, conta
             const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
             if (!alreadyQueued) {
                 buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact, agreedPrice: offeredPrice });
+                console.log(`🔢 [Handler] ${senderName} queued with offer ₹${offeredPrice} (position ${buyerQueue.length}).`);
             }
 
-            const elapsed = Date.now() - currentBuyer.assignedAt;
-            if (elapsed < config.BUYER_INACTIVITY_MS) {
-                scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
-            } else {
+            if (!queueTimer) {
                 await moveNextBuyer();
             }
         }
@@ -608,12 +668,10 @@ async function handleNegotiation(chat, senderId, senderName, offeredPrice, conta
             const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
             if (!alreadyQueued) {
                 buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact, agreedPrice: minAcceptable });
+                console.log(`🔢 [Handler] ${senderName} queued with counter-offer ₹${minAcceptable} (position ${buyerQueue.length}).`);
             }
 
-            const elapsed = Date.now() - currentBuyer.assignedAt;
-            if (elapsed < config.BUYER_INACTIVITY_MS) {
-                scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
-            } else {
+            if (!queueTimer) {
                 await moveNextBuyer();
             }
         }
@@ -639,12 +697,10 @@ async function handleNegotiationDisabled(chat, senderId, senderName, contact = n
         const alreadyQueued = buyerQueue.some((b) => b.id === senderId);
         if (!alreadyQueued) {
             buyerQueue.push({ id: senderId, name: senderName, chatId: chat.id._serialized, contact, agreedPrice: safePrice });
+            console.log(`🔢 [Handler] ${senderName} queued with fixed price ₹${safePrice} (position ${buyerQueue.length}).`);
         }
 
-        const elapsed = Date.now() - currentBuyer.assignedAt;
-        if (elapsed < config.BUYER_INACTIVITY_MS) {
-            scheduleNextBuyer(config.BUYER_INACTIVITY_MS - elapsed);
-        } else {
+        if (!queueTimer) {
             await moveNextBuyer();
         }
     }

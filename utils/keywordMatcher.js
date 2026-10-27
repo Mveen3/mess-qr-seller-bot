@@ -30,6 +30,29 @@ function isDoneKeyword(text) {
     return matched || null;
 }
 
+function isTimeKeyword(text) {
+    const lower = normalizeText(text);
+    if (!lower) return null;
+
+    const timeKeywords = (config.TIME_KEYWORDS && config.TIME_KEYWORDS.length)
+        ? config.TIME_KEYWORDS
+        : ['time', 'extra time', 'need time', 'more time', 'wait'];
+
+    const matched = timeKeywords.find((kw) => {
+        const keyword = normalizeText(kw);
+        if (!keyword) return false;
+
+        // Exact match or polite prefix/suffix (e.g. "time", "time please", "pls time")
+        const exactRegex = new RegExp(`^(?:(?:pls|please|give|send|thoda)\\s+)?${escapeRegex(keyword)}(?:\\s+(?:pls|please|plz|bro|bhai))?[.!?]*$`, 'i');
+        if (exactRegex.test(lower)) return true;
+
+        // Starts with keyword if short (e.g. "time 1 min", "wait 2 min")
+        const startRegex = new RegExp(`^${escapeRegex(keyword)}(?:\\s+[0-9a-z]+)?[.!?]*$`, 'i');
+        return startRegex.test(lower);
+    });
+    return matched || null;
+}
+
 /**
  * Detects if a message or quoted reply contains "Sell <mess name> <meal type>" as a substring.
  * E.g. "Sell Kadamba Veg Breakfast @35", "Sell Palash Lunch @30", etc.
@@ -72,4 +95,4 @@ function normalizeText(value) {
     return typeof value === 'string' ? value.toLowerCase().trim() : '';
 }
 
-module.exports = { isBuyerKeyword, isDoneKeyword, isSellMessageSubstring };
+module.exports = { isBuyerKeyword, isDoneKeyword, isTimeKeyword, isSellMessageSubstring };

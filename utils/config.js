@@ -170,9 +170,12 @@ const settings = {
 
     BUYER_INACTIVITY_MS: getNumber(raw, 'BUYER_INACTIVITY_MS'),
     BUYER_TIMEOUT_WARNING_MS: getNumber(raw, 'BUYER_TIMEOUT_WARNING_MS'),
+    BUYER_EXTEND_TIME_MS: getNumber(raw, 'BUYER_EXTEND_TIME_MS') || 60000,
+    BUYER_EXTEND_WARNING_MS: getNumber(raw, 'BUYER_EXTEND_WARNING_MS') || 10000,
 
     BUYER_KEYWORDS: getList(raw, 'BUYER_KEYWORDS'),
     DONE_KEYWORDS: getList(raw, 'DONE_KEYWORDS'),
+    TIME_KEYWORDS: getList(raw, 'TIME_KEYWORDS'),
 
     LOYALTY_TARGET: getNumber(raw, 'LOYALTY_TARGET') || 170,
     LOYALTY_CSV_PATH: resolveProjectPath(getText(raw, 'LOYALTY_CSV_PATH')) || resolveProjectPath('utils/purchases.csv'),
@@ -189,10 +192,14 @@ settings.sellMessage = (messName, mealType, price) =>
     });
 
 settings.paymentInstructionMessage = () => getText(raw, 'PAYMENT_INSTRUCTION_MESSAGE');
+settings.timePromptMessage = () => getText(raw, 'TIME_PROMPT_MESSAGE') || '_Need more time? Reply *TIME* for an extra 60s._';
 settings.soldMessage = () => getText(raw, 'SOLD_MESSAGE');
 settings.unrecognizedMessage = () => getText(raw, 'UNRECOGNIZED_MESSAGE');
 settings.timeoutWarningMessage = () => getText(raw, 'TIMEOUT_WARNING_MESSAGE');
 settings.timeoutFinalMessage = () => getText(raw, 'TIMEOUT_FINAL_MESSAGE');
+settings.timeExtensionGrantedMessage = () => getText(raw, 'TIME_EXTENSION_GRANTED_MESSAGE') || '⏳ Extra 60s granted! Please reply *DONE* after payment.';
+settings.timeExtensionWarningMessage = () => getText(raw, 'TIME_EXTENSION_WARNING_MESSAGE') || '⏳ 10s left to confirm payment before moving to next buyer.';
+settings.timeExtensionAlreadyUsedMessage = () => getText(raw, 'TIME_EXTENSION_ALREADY_USED_MESSAGE') || '⚠️ Extra time already granted. Please reply *DONE* once paid.';
 
 settings.saleConfirmMessage = (buyerName, mealType, loyaltyStatus = '') =>
     applyTemplate(getText(raw, 'SALE_CONFIRM_MESSAGE'), { buyerName, mealType, loyaltyStatus });

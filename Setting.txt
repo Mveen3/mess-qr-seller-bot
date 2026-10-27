@@ -20,7 +20,7 @@ MEAL_DINNER_START=19:30
 MEAL_DINNER_END=21:30
 
 # ─── Seller Info ────────────────────────────────────────────────
-UPI_ID=mveen@upi
+UPI_ID=mveen3@jio
 QR_IMAGE_PATH=utils/qr.png
 
 # ─── Defaults ───────────────────────────────────────────────────
@@ -38,10 +38,13 @@ NEGOTIATION_MARGIN=5
 # ─── Buyer Timeout ──────────────────────────────────────────────
 BUYER_INACTIVITY_MS=90000
 BUYER_TIMEOUT_WARNING_MS=30000
+BUYER_EXTEND_TIME_MS=60000
+BUYER_EXTEND_WARNING_MS=10000
 
 # ─── Keywords ───────────────────────────────────────────────────
 BUYER_KEYWORDS=buy, want, wants, available, available?, interested, need, qr, breakfast, sold, wanna, is it there, kharidna, chahiye, chaiye, dedo, bhejo, bhej, take
 DONE_KEYWORDS=done, paid, sent, pay, kar diya
+TIME_KEYWORDS=time, extra time, need time, more time, wait
 
 # ─── Loyalty / Free Meal ─────────────────────────────────────────
 LOYALTY_TARGET=180
@@ -54,10 +57,14 @@ LOYALTY_REACHED_TEMPLATE=🎉 Your total spent crossed ₹{target}! Next meal is
 # ─── Message Templates ──────────────────────────────────────────
 SELL_MESSAGE_TEMPLATE=Sell {messName} {mealTypeCapitalized} @{price}
 PAYMENT_INSTRUCTION_MESSAGE=_This transaction is handled by an automated system. Please reply_ *DONE* _to get the QR_
+TIME_PROMPT_MESSAGE=_Need more time? Reply *TIME* for an extra 60s._
 SOLD_MESSAGE=Sorry, already sold!
 UNRECOGNIZED_MESSAGE=Please reply *DONE* after payment
 TIMEOUT_WARNING_MESSAGE=⏳ 30s left to confirm payment before moving to next buyer
 TIMEOUT_FINAL_MESSAGE=Moved to next buyer. Reply *WANTS* if still interested
+TIME_EXTENSION_GRANTED_MESSAGE=⏳ Extra 60s granted! Please reply *DONE* after payment.
+TIME_EXTENSION_WARNING_MESSAGE=⏳ 10s left to confirm payment before moving to next buyer.
+TIME_EXTENSION_ALREADY_USED_MESSAGE=⚠️ Extra time already granted. Please reply *DONE* once paid.
 SALE_CONFIRM_MESSAGE=Enjoy your {mealType}, {buyerName}!\n{loyaltyStatus}\n\n_Reply *TESTING* if not buying_
 TEST_REVERTED_MESSAGE=Got it! Thanks for letting me know
 NEGOTIATION_ACCEPTED_MESSAGE=✅ ₹{price} accepted!
