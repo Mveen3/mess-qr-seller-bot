@@ -950,6 +950,16 @@ async function revertSale(chat, buyerName) {
     currentBuyer = null;
     reactOwnGroupMessages = false;
     allowTestingRevert = true;
+
+    // 1. Send confirmation to the buyer immediately
+    try {
+        await chat.sendMessage(config.testRevertedMessage());
+        console.log(`💬 [Handler] Sent revert confirmation to ${buyerName}.`);
+    } catch (err) {
+        console.error('❌ [Handler] Error sending revert confirmation:', err.message);
+    }
+
+    // 2. Untick all group reactions across groups
     await removeAllTrackedReactions();
 
     if (stats.loyaltyRecord) {
@@ -965,12 +975,6 @@ async function revertSale(chat, buyerName) {
     stats.isFreeMeal = false;
 
     console.log(`\n⏪ [Handler] UNSOLD — ${buyerName} was just testing.`);
-
-    try {
-        await chat.sendMessage(config.testRevertedMessage());
-    } catch (err) {
-        console.error('❌ [Handler] Error sending revert confirmation:', err.message);
-    }
 
     restartScheduler();
 }
